@@ -1,7 +1,5 @@
 LOCAL_PATH:= $(call my-dir)
 
-# TODO(b/144385920): Re-enable after libgooglecamerahalutils is available
-ifeq ("b144385920",)
 ifneq ($(filter vsoc_x86 vsoc_x86_64 vsoc_arm64,$(TARGET_BOARD_PLATFORM)),)
 
 include $(CLEAR_VARS)
@@ -61,4 +59,3 @@ LOCAL_HEADER_LIBRARIES := \
 include $(BUILD_SHARED_LIBRARY)
 
 endif
-endif # b/144385920
