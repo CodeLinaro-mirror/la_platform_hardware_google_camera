@@ -254,7 +254,10 @@ class EmulatedRequestState {
   bool report_bokeh_mode_ = false;
 
   // android.scaler.*
+  bool report_rotate_and_crop_ = false;
+  uint8_t rotate_and_crop_ = ANDROID_SCALER_ROTATE_AND_CROP_NONE;
   int32_t scaler_crop_region_default_[4] = {0, 0, 0, 0};
+  std::set<uint8_t> available_rotate_crop_modes_;
 
   // android.statistics.*
   std::set<uint8_t> available_hot_pixel_map_modes_;
