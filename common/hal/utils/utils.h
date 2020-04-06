@@ -31,6 +31,7 @@ bool IsInputRawStream(const Stream& stream);
 bool IsArbitraryDataSpaceRawStream(const Stream& stream);
 bool IsYUVSnapshotStream(const Stream& stream);
 bool IsDepthStream(const Stream& stream);
+bool IsOutputZslStream(const Stream& stream);
 
 status_t GetSensorPhysicalSize(const HalCameraMetadata* characteristics,
                                float* width, float* height);
@@ -43,6 +44,9 @@ status_t GetSensorPixelArraySize(const HalCameraMetadata* characteristics,
 
 status_t GetFocalLength(const HalCameraMetadata* characteristics,
                         float* focal_length);
+
+status_t GetZoomRatioRange(const HalCameraMetadata* characteristics,
+                           ZoomRatioRange* zoom_ratio_range);
 
 // Return if LiveSnapshot is configured
 bool IsLiveSnapshotConfigured(const StreamConfiguration& stream_config);

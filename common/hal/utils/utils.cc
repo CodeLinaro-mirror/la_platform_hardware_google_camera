@@ -60,6 +60,16 @@ bool IsJPEGSnapshotStream(const Stream& stream) {
   return false;
 }
 
+bool IsOutputZslStream(const Stream& stream) {
+  if (stream.stream_type == StreamType::kOutput &&
+      (stream.usage & GRALLOC_USAGE_HW_CAMERA_ZSL) ==
+          GRALLOC_USAGE_HW_CAMERA_ZSL) {
+    return true;
+  }
+
+  return false;
+}
+
 bool IsVideoStream(const Stream& stream) {
   if (stream.stream_type == StreamType::kOutput &&
       (stream.usage & GRALLOC_USAGE_HW_VIDEO_ENCODER) != 0) {
@@ -149,6 +159,29 @@ status_t GetSensorActiveArraySize(const HalCameraMetadata* characteristics,
   active_array->top = entry.data.i32[1];
   active_array->right = entry.data.i32[0] + entry.data.i32[2] - 1;
   active_array->bottom = entry.data.i32[1] + entry.data.i32[3] - 1;
+
+  return OK;
+}
+
+status_t GetZoomRatioRange(const HalCameraMetadata* characteristics,
+                           ZoomRatioRange* zoom_ratio_range) {
+  if (characteristics == nullptr || zoom_ratio_range == nullptr) {
+    ALOGE("%s: characteristics or zoom_ratio_range is nullptr", __FUNCTION__);
+    return BAD_VALUE;
+  }
+
+  camera_metadata_ro_entry entry;
+  status_t res = characteristics->Get(ANDROID_CONTROL_ZOOM_RATIO_RANGE, &entry);
+  if (res != OK || entry.count != 2) {
+    ALOGE(
+        "%s: Getting ANDROID_CONTROL_ZOOM_RATIO_RANGE failed: %s(%d) "
+        "count: %zu",
+        __FUNCTION__, strerror(-res), res, entry.count);
+    return res;
+  }
+
+  zoom_ratio_range->min = entry.data.f[0];
+  zoom_ratio_range->max = entry.data.f[1];
 
   return OK;
 }
