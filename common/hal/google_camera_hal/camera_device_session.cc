@@ -169,9 +169,7 @@ void CameraDeviceSession::ProcessCaptureResult(
     ALOGE("%s: result is nullptr", __FUNCTION__);
     return;
   }
-  if (result->result_metadata != nullptr) {
-    zoom_ratio_mapper_.ApplyZoomRatio(result->result_metadata.get(), false);
-  }
+  zoom_ratio_mapper_.UpdateCaptureResult(result.get());
 
   // If buffer management is not supported, simply send the result to the client.
   if (!buffer_management_supported_) {
@@ -769,9 +767,7 @@ status_t CameraDeviceSession::CreateCaptureRequestLocked(
     }
   }
 
-  if (updated_request->settings != nullptr) {
-    zoom_ratio_mapper_.ApplyZoomRatio(updated_request->settings.get(), true);
-  }
+  zoom_ratio_mapper_.UpdateCaptureRequest(updated_request);
 
   return OK;
 }
@@ -1167,7 +1163,21 @@ status_t CameraDeviceSession::ProcessCaptureRequest(
         }
       }
 
-      {
+      // Check the flush status again to prevent flush being called while we are
+      // waiting for the request buffers(request throttling).
+      if (buffer_management_supported_ && is_flushing_) {
+        std::vector<StreamBuffer> buffers = updated_request.output_buffers;
+        {
+          std::lock_guard<std::mutex> lock(request_record_lock_);
+          pending_request_streams_.erase(updated_request.frame_number);
+        }
+        NotifyErrorRequest(updated_request.frame_number);
+        NotifyBufferError(updated_request);
+        if (pending_requests_tracker_->TrackReturnedResultBuffers(buffers) !=
+            OK) {
+          ALOGE("%s: Tracking requested quota buffers failed", __FUNCTION__);
+        }
+      } else {
         std::shared_lock lock(capture_session_lock_);
         if (capture_session_ == nullptr) {
           ALOGE("%s: Capture session wasn't created.", __FUNCTION__);
