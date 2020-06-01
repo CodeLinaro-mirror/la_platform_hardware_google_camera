@@ -49,12 +49,15 @@ class RgbirdDepthResultProcessor : public ResultProcessor {
   void ProcessResult(ProcessBlockResult block_result) override;
 
   void Notify(const ProcessBlockNotifyMessage& block_message) override;
+
+  status_t FlushPendingRequests() override;
   // Override functions of ResultProcessor end.
 
  protected:
   RgbirdDepthResultProcessor(InternalStreamManager* internal_stream_manager);
 
  private:
+  static constexpr int32_t kInvalidStreamId = -1;
   InternalStreamManager* internal_stream_manager_ = nullptr;
 
   std::mutex callback_lock_;
