@@ -295,9 +295,9 @@ status_t DepthProcessBlock::SubmitBlockingDepthRequest(
 
 status_t DepthProcessBlock::SubmitAsyncDepthRequest(
     const DepthRequestInfo& request_info) {
+  std::unique_lock<std::mutex> lock(depth_generator_api_lock_);
   ALOGV("%s: [ud] ExecuteProcessRequest for frame %d", __FUNCTION__,
         request_info.frame_number);
-
   status_t res = depth_generator_->EnqueueProcessRequest(request_info);
   if (res != OK) {
     ALOGE("%s: Failed to enqueue depth request.", __FUNCTION__);
@@ -309,6 +309,7 @@ status_t DepthProcessBlock::SubmitAsyncDepthRequest(
 
 status_t DepthProcessBlock::ProcessDepthResult(DepthResultStatus result_status,
                                                uint32_t frame_number) {
+  std::unique_lock<std::mutex> lock(depth_generator_api_lock_);
   ALOGV("%s: [ud] Depth result for frame %u notified.", __FUNCTION__,
         frame_number);
 
@@ -612,6 +613,14 @@ status_t DepthProcessBlock::MapDepthRequestBuffers(
   status_t res = OK;
   depth_request_info->ir_buffer.resize(2);
   for (auto& input_buffer : request.input_buffers) {
+    // If the stream id is invalid. The input buffer is only a place holder
+    // corresponding to the input buffer metadata for the rgb pipeline.
+    if (input_buffer.stream_id == kInvalidStreamId) {
+      ALOGV("%s: Skipping input buffer place holder for frame %u.",
+            __FUNCTION__, depth_request_info->frame_number);
+      continue;
+    }
+
     depth_generator::Buffer buffer = {};
     res = MapBuffersForDepthGenerator(input_buffer, &buffer);
     if (res != OK) {
@@ -741,6 +750,12 @@ status_t DepthProcessBlock::UnmapDepthRequestBuffers(uint32_t frame_number) {
   for (auto& input_buffer : request.input_buffers) {
     uint8_t* addr = nullptr;
     int32_t stream_id = input_buffer.stream_id;
+    if (stream_id == kInvalidStreamId) {
+      ALOGV("%s: input buffer place holder found for frame %u", __FUNCTION__,
+            frame_number);
+      continue;
+    }
+
     if (stream_id == rgb_internal_yuv_stream_id_) {
       addr = depth_request_info.color_buffer[0].planes[0].addr;
     } else if (stream_id == ir1_internal_raw_stream_id_) {

@@ -89,9 +89,13 @@ const uint8_t EmulatedScene::kScene[EmulatedScene::kSceneWidth *
 EmulatedScene::EmulatedScene(int sensor_width_px, int sensor_height_px,
                              float sensor_sensitivity, int sensor_orientation,
                              bool is_front_facing)
-    : sensor_handle_(-1), screen_rotation_(0), current_scene_(scene_rot0_),
-      sensor_orientation_(sensor_orientation), is_front_facing_(is_front_facing),
-      hour_(12), exposure_duration_(0.033f) {
+    : sensor_handle_(-1),
+      screen_rotation_(0),
+      current_scene_(scene_rot0_),
+      sensor_orientation_(sensor_orientation),
+      is_front_facing_(is_front_facing),
+      hour_(12),
+      exposure_duration_(0.033f) {
   // Assume that sensor filters are sRGB primaries to start
   filter_r_[0] = 3.2406f;
   filter_r_[1] = -1.5372f;
@@ -107,7 +111,6 @@ EmulatedScene::EmulatedScene(int sensor_width_px, int sensor_height_px,
   filter_b_[2] = 1.0570f;
 
   InitiliazeSceneRotation(!is_front_facing_);
-  InitializeSensorQueue();
   Initialize(sensor_width_px, sensor_height_px, sensor_sensitivity);
 }
 
@@ -137,7 +140,12 @@ void EmulatedScene::Initialize(int sensor_width_px, int sensor_height_px,
 
 }
 
-Return<void> EmulatedScene::onEvent(const Event &e) {
+Return<void> EmulatedScene::SensorHandler::onEvent(const Event& e) {
+  auto scene = scene_.promote();
+  if (scene.get() == nullptr) {
+    return Void();
+  }
+
   if (e.sensorType == SensorType::ACCELEROMETER) {
     // Heuristic approach for deducing the screen
     // rotation depending on the reported
@@ -149,13 +157,13 @@ Return<void> EmulatedScene::onEvent(const Event &e) {
     uint32_t x_accel = e.u.vec3.x;
     uint32_t y_accel = e.u.vec3.y;
     if (x_accel == earth_accel) {
-      screen_rotation_ = 270;
+      scene->screen_rotation_ = 270;
     } else if (x_accel == -earth_accel) {
-      screen_rotation_ = 90;
+      scene->screen_rotation_ = 90;
     } else if (y_accel == -earth_accel) {
-      screen_rotation_ = 180;
+      scene->screen_rotation_ = 180;
     } else {
-      screen_rotation_ = 0;
+      scene->screen_rotation_ = 0;
     }
   } else {
     ALOGE("%s: unexpected event received type: %d", __func__, e.sensorType);
@@ -428,6 +436,10 @@ void EmulatedScene::InitiliazeSceneRotation(bool clock_wise) {
 }
 
 void EmulatedScene::InitializeSensorQueue() {
+  if (sensor_event_queue_.get() != nullptr) {
+    return;
+  }
+
   sp<ISensorManager> manager = ISensorManager::getService();
   if (manager == nullptr) {
     ALOGE("%s: Cannot get ISensorManager", __func__);
@@ -446,8 +458,8 @@ void EmulatedScene::InitializeSensorQueue() {
           }
         }});
     if (sensor_found) {
-      manager->createEventQueue(this,
-          [&] (const auto &q, auto result) {
+      manager->createEventQueue(
+          new SensorHandler(this), [&](const auto& q, auto result) {
             if (result != Result::OK) {
               ALOGE("%s: Cannot create event queue", __func__);
               return;

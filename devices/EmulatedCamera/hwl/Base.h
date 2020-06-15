@@ -57,6 +57,7 @@ struct SensorBuffer {
   HwlPipelineCallback callback;
   int acquire_fence_fd;
   bool is_input;
+  bool is_failed_request;
 
   union Plane {
     SinglePlane img;
@@ -73,6 +74,7 @@ struct SensorBuffer {
         dataSpace(HAL_DATASPACE_UNKNOWN),
         acquire_fence_fd(-1),
         is_input(false),
+        is_failed_request(false),
         plane{} {
   }
 
@@ -96,6 +98,7 @@ struct std::default_delete<android::SensorBuffer> {
     if (buffer != nullptr) {
       if (buffer->stream_buffer.buffer != nullptr) {
         buffer->importer.unlock(buffer->stream_buffer.buffer);
+        buffer->importer.freeBuffer(buffer->stream_buffer.buffer);
       }
 
       if (buffer->acquire_fence_fd >= 0) {
@@ -103,7 +106,7 @@ struct std::default_delete<android::SensorBuffer> {
       }
 
       if ((buffer->stream_buffer.status != BufferStatus::kOk) &&
-          (buffer->callback.notify != nullptr)) {
+          (buffer->callback.notify != nullptr) && (!buffer->is_failed_request)) {
         NotifyMessage msg = {
             .type = MessageType::kError,
             .message.error = {.frame_number = buffer->frame_number,
