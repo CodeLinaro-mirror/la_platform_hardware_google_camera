@@ -19,6 +19,7 @@
 
 #include <android/hardware/graphics/mapper/2.0/IMapper.h>
 #include <android/hardware/graphics/mapper/3.0/IMapper.h>
+#include <android/hardware/graphics/mapper/4.0/IMapper.h>
 #include <memory>
 #include <set>
 #include <shared_mutex>
@@ -156,6 +157,9 @@ class CameraDeviceSession {
   status_t Initialize(std::unique_ptr<CameraDeviceSessionHwl> device_session_hwl,
                       CameraBufferAllocatorHwl* camera_allocator_hwl);
 
+  // Initialize the latest available gralloc buffer mapper.
+  status_t InitializeBufferMapper();
+
   // Initialize callbacks from HWL and callbacks to the client.
   void InitializeCallbacks();
 
@@ -245,9 +249,10 @@ class CameraDeviceSession {
   // Process the capture result returned from the HWL
   void ProcessCaptureResult(std::unique_ptr<CaptureResult> result);
 
-  // Notify ERROR_ERQUEST for frame[frame_number]. Caller is responsible to make
-  // sure this function is called only once for any frame.
-  void NotifyErrorRequest(uint32_t frame_number);
+  // Notify error message with error code for stream of frame[frame_number].
+  // Caller is responsible to make sure this function is called only once for any frame.
+  void NotifyErrorMessage(uint32_t frame_number, int32_t stream_id,
+                          ErrorCode error_code);
 
   // Notify buffer error for all output streams in request
   void NotifyBufferError(const CaptureRequest& request);
@@ -293,6 +298,7 @@ class CameraDeviceSession {
   // Graphics buffer mapper used to import and free buffers.
   sp<android::hardware::graphics::mapper::V2_0::IMapper> buffer_mapper_v2_;
   sp<android::hardware::graphics::mapper::V3_0::IMapper> buffer_mapper_v3_;
+  sp<android::hardware::graphics::mapper::V4_0::IMapper> buffer_mapper_v4_;
 
   // Assuming callbacks to framework is thread-safe, the shared mutex is only
   // used to protect member variable writing and reading.
@@ -398,6 +404,12 @@ class CameraDeviceSession {
 
   // Zoom ratio mapper
   ZoomRatioMapper zoom_ratio_mapper_;
+
+  // Record the result metadata of pending request
+  // Protected by request_record_lock_;
+  std::set<uint32_t> pending_results_;
+
+  static constexpr int32_t kInvalidStreamId = -1;
 };
 
 }  // namespace google_camera_hal
