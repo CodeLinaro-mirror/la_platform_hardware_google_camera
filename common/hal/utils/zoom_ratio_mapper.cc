@@ -18,15 +18,32 @@
 
 #include "zoom_ratio_mapper.h"
 #include <log/log.h>
+#include "utils.h"
 
 namespace android {
 namespace google_camera_hal {
 
-void ZoomRatioMapper::Initialize(InitParams params) {
-  memcpy(&active_array_dimension_, &params.active_array_dimension,
+int32_t kWeightedRectToConvert[] = {ANDROID_CONTROL_AE_REGIONS,
+                                    ANDROID_CONTROL_AF_REGIONS,
+                                    ANDROID_CONTROL_AWB_REGIONS};
+
+int32_t kRectToConvert[] = {ANDROID_SCALER_CROP_REGION};
+
+int32_t kResultPointsToConvert[] = {ANDROID_STATISTICS_FACE_LANDMARKS,
+                                    ANDROID_STATISTICS_FACE_RECTANGLES};
+
+void ZoomRatioMapper::Initialize(InitParams* params) {
+  if (params == nullptr) {
+    ALOGE("%s: invalid param", __FUNCTION__);
+    return;
+  }
+  memcpy(&active_array_dimension_, &params->active_array_dimension,
          sizeof(active_array_dimension_));
-  memcpy(&zoom_ratio_range_, &params.zoom_ratio_range,
+  physical_cam_active_array_dimension_ =
+      params->physical_cam_active_array_dimension;
+  memcpy(&zoom_ratio_range_, &params->zoom_ratio_range,
          sizeof(zoom_ratio_range_));
+  zoom_ratio_mapper_hwl_ = std::move(params->zoom_ratio_mapper_hwl);
   is_zoom_ratio_supported_ = true;
 }
 
@@ -42,13 +59,24 @@ void ZoomRatioMapper::UpdateCaptureRequest(CaptureRequest* request) {
   }
 
   if (request->settings != nullptr) {
-    ApplyZoomRatio(request->settings.get(), true);
+    ApplyZoomRatio(active_array_dimension_, true, request->settings.get());
   }
 
   for (auto& [camera_id, metadata] : request->physical_camera_settings) {
     if (metadata != nullptr) {
-      ApplyZoomRatio(metadata.get(), true);
+      auto physical_cam_iter =
+          physical_cam_active_array_dimension_.find(camera_id);
+      if (physical_cam_iter == physical_cam_active_array_dimension_.end()) {
+        ALOGE("%s: Physical camera id %d is not found!", __FUNCTION__,
+              camera_id);
+        continue;
+      }
+      Dimension physical_active_array_dimension = physical_cam_iter->second;
+      ApplyZoomRatio(physical_active_array_dimension, true, metadata.get());
     }
+  }
+  if (zoom_ratio_mapper_hwl_) {
+    zoom_ratio_mapper_hwl_->UpdateCaptureRequest(request);
   }
 }
 
@@ -64,18 +92,31 @@ void ZoomRatioMapper::UpdateCaptureResult(CaptureResult* result) {
   }
 
   if (result->result_metadata != nullptr) {
-    ApplyZoomRatio(result->result_metadata.get(), false);
+    ApplyZoomRatio(active_array_dimension_, false,
+                   result->result_metadata.get());
   }
 
   for (auto& [camera_id, metadata] : result->physical_metadata) {
     if (metadata != nullptr) {
-      ApplyZoomRatio(metadata.get(), false);
+      auto physical_cam_iter =
+          physical_cam_active_array_dimension_.find(camera_id);
+      if (physical_cam_iter == physical_cam_active_array_dimension_.end()) {
+        ALOGE("%s: Physical camera id %d is not found!", __FUNCTION__,
+              camera_id);
+        continue;
+      }
+      Dimension physical_active_array_dimension = physical_cam_iter->second;
+      ApplyZoomRatio(physical_active_array_dimension, false, metadata.get());
     }
+  }
+  if (zoom_ratio_mapper_hwl_) {
+    zoom_ratio_mapper_hwl_->UpdateCaptureResult(result);
   }
 }
 
-void ZoomRatioMapper::ApplyZoomRatio(HalCameraMetadata* metadata,
-                                     const bool is_request) {
+void ZoomRatioMapper::ApplyZoomRatio(const Dimension& active_array_dimension,
+                                     const bool is_request,
+                                     HalCameraMetadata* metadata) {
   if (metadata == nullptr) {
     ALOGE("%s: metadata is nullptr", __FUNCTION__);
     return;
@@ -99,45 +140,36 @@ void ZoomRatioMapper::ApplyZoomRatio(HalCameraMetadata* metadata,
     zoom_ratio = zoom_ratio_range_.max;
   }
 
-  UpdateCropRegion(metadata, zoom_ratio, is_request);
-  Update3ARegion(metadata, zoom_ratio, ANDROID_CONTROL_AE_REGIONS, is_request);
-  Update3ARegion(metadata, zoom_ratio, ANDROID_CONTROL_AF_REGIONS, is_request);
-  Update3ARegion(metadata, zoom_ratio, ANDROID_CONTROL_AWB_REGIONS, is_request);
+  for (auto tag_id : kRectToConvert) {
+    UpdateRects(zoom_ratio, tag_id, active_array_dimension, is_request,
+                metadata);
+  }
+
+  for (auto tag_id : kWeightedRectToConvert) {
+    UpdateWeightedRects(zoom_ratio, tag_id, active_array_dimension, is_request,
+                        metadata);
+  }
 
   if (!is_request) {
-    uint8_t face_detection_mode = ANDROID_STATISTICS_FACE_DETECT_MODE_OFF;
-    res = metadata->Get(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry);
-    if (res != OK) {
-      ALOGE("%s: Failed to get face detection mode", __FUNCTION__);
-      return;
-    }
-    face_detection_mode = *entry.data.u8;
-
-    switch (face_detection_mode) {
-      case ANDROID_STATISTICS_FACE_DETECT_MODE_FULL:
-        UpdateFaceLandmarks(metadata, zoom_ratio);
-        [[fallthrough]];
-      case ANDROID_STATISTICS_FACE_DETECT_MODE_SIMPLE:
-        UpdateFaceRectangles(metadata, zoom_ratio);
-        break;
-      default:
-        break;
+    for (auto tag_id : kResultPointsToConvert) {
+      UpdatePoints(zoom_ratio, tag_id, active_array_dimension, metadata);
     }
   }
 }
 
-void ZoomRatioMapper::UpdateCropRegion(HalCameraMetadata* metadata,
-                                       const float zoom_ratio,
-                                       const bool is_request) {
+void ZoomRatioMapper::UpdateRects(const float zoom_ratio, const uint32_t tag_id,
+                                  const Dimension& active_array_dimension,
+                                  const bool is_request,
+                                  HalCameraMetadata* metadata) {
   if (metadata == nullptr) {
     ALOGE("%s: metadata is nullptr", __FUNCTION__);
     return;
   }
   camera_metadata_ro_entry entry = {};
-  status_t res = metadata->Get(ANDROID_SCALER_CROP_REGION, &entry);
+  status_t res = metadata->Get(tag_id, &entry);
   if (res != OK || entry.count == 0) {
-    ALOGE("%s: Failed to get the region: %d, res: %d", __FUNCTION__,
-          ANDROID_SCALER_CROP_REGION, res);
+    ALOGE("%s: Failed to get the region: %d, res: %d", __FUNCTION__, tag_id,
+          res);
     return;
   }
   int32_t left = entry.data.i32[0];
@@ -146,27 +178,31 @@ void ZoomRatioMapper::UpdateCropRegion(HalCameraMetadata* metadata,
   int32_t height = entry.data.i32[3];
 
   if (is_request) {
-    ConvertZoomRatio(zoom_ratio, &left, &top, &width, &height);
+    utils::ConvertZoomRatio(zoom_ratio, active_array_dimension, &left, &top,
+                            &width, &height);
   } else {
-    RevertZoomRatio(zoom_ratio, &left, &top, &width, &height);
+    utils::RevertZoomRatio(zoom_ratio, active_array_dimension, true, &left,
+                           &top, &width, &height);
   }
   int32_t rect[4] = {left, top, width, height};
 
-  ALOGV("%s: set ANDROID_SCALER_CROP_REGION: [%d, %d, %d, %d]", __FUNCTION__,
-        rect[0], rect[1], rect[2], rect[3]);
+  ALOGV(
+      "%s: is request: %d, zoom ratio: %f, set rect: [%d, %d, %d, %d] -> [%d, "
+      "%d, %d, %d]",
+      __FUNCTION__, is_request, zoom_ratio, entry.data.i32[0], entry.data.i32[1],
+      entry.data.i32[2], entry.data.i32[3], rect[0], rect[1], rect[2], rect[3]);
 
-  res = metadata->Set(ANDROID_SCALER_CROP_REGION, rect,
-                      sizeof(rect) / sizeof(int32_t));
+  res = metadata->Set(tag_id, rect, sizeof(rect) / sizeof(int32_t));
   if (res != OK) {
-    ALOGE("%s: Updating crop region failed: %s (%d)", __FUNCTION__,
+    ALOGE("%s: Updating region: %u failed: %s (%d)", __FUNCTION__, tag_id,
           strerror(-res), res);
   }
 }
 
-void ZoomRatioMapper::Update3ARegion(HalCameraMetadata* metadata,
-                                     const float zoom_ratio,
-                                     const uint32_t tag_id,
-                                     const bool is_request) {
+void ZoomRatioMapper::UpdateWeightedRects(
+    const float zoom_ratio, const uint32_t tag_id,
+    const Dimension& active_array_dimension, const bool is_request,
+    HalCameraMetadata* metadata) {
   if (metadata == nullptr) {
     ALOGE("%s: metadata is nullptr", __FUNCTION__);
     return;
@@ -190,9 +226,11 @@ void ZoomRatioMapper::Update3ARegion(HalCameraMetadata* metadata,
     int32_t height = regions[i].bottom - regions[i].top + 1;
 
     if (is_request) {
-      ConvertZoomRatio(zoom_ratio, &left, &top, &width, &height);
+      utils::ConvertZoomRatio(zoom_ratio, active_array_dimension, &left, &top,
+                              &width, &height);
     } else {
-      RevertZoomRatio(zoom_ratio, &left, &top, &width, &height);
+      utils::RevertZoomRatio(zoom_ratio, active_array_dimension, true, &left,
+                             &top, &width, &height);
     }
 
     updated_regions[i].left = left;
@@ -201,7 +239,7 @@ void ZoomRatioMapper::Update3ARegion(HalCameraMetadata* metadata,
     updated_regions[i].bottom = top + height - 1;
     updated_regions[i].weight = regions[i].weight;
 
-    ALOGV("%s: set 3A(%d) region: [%d, %d, %d, %d, %d]", __FUNCTION__, tag_id,
+    ALOGV("%s: set region(%d): [%d, %d, %d, %d, %d]", __FUNCTION__, tag_id,
           updated_regions[i].left, updated_regions[i].top,
           updated_regions[i].right, updated_regions[i].bottom,
           updated_regions[i].weight);
@@ -214,201 +252,45 @@ void ZoomRatioMapper::Update3ARegion(HalCameraMetadata* metadata,
   }
 }
 
-void ZoomRatioMapper::ConvertZoomRatio(const float zoom_ratio, int32_t* left,
-                                       int32_t* top, int32_t* width,
-                                       int32_t* height) {
-  if (left == nullptr || top == nullptr || width == nullptr ||
-      height == nullptr) {
-    ALOGE("%s, invalid params", __FUNCTION__);
-    return;
-  }
-
-  assert(zoom_ratio != 0);
-  *left = std::round(*left / zoom_ratio + 0.5f * active_array_dimension_.width *
-                                              (1.0f - 1.0f / zoom_ratio));
-  *top = std::round(*top / zoom_ratio + 0.5f * active_array_dimension_.height *
-                                            (1.0f - 1.0f / zoom_ratio));
-  *width = std::round(*width / zoom_ratio);
-  *height = std::round(*height / zoom_ratio);
-
-  if (zoom_ratio >= 1.0f) {
-    CorrectBoundary(left, top, width, height, active_array_dimension_.width,
-                    active_array_dimension_.height);
-  }
-
-  ALOGV("%s: zoom: %f, active array: [%d x %d], rect: [%d, %d, %d, %d]",
-        __FUNCTION__, zoom_ratio, active_array_dimension_.width,
-        active_array_dimension_.height, *left, *top, *width, *height);
-}
-
-void ZoomRatioMapper::RevertZoomRatio(const float zoom_ratio, int32_t* left,
-                                      int32_t* top, int32_t* width,
-                                      int32_t* height) {
-  if (left == nullptr || top == nullptr || width == nullptr ||
-      height == nullptr) {
-    ALOGE("%s, invalid params", __FUNCTION__);
-    return;
-  }
-
-  *left = std::round(*left * zoom_ratio - 0.5f * active_array_dimension_.width *
-                                              (zoom_ratio - 1.0f));
-  *top = std::round(*top * zoom_ratio - 0.5f * active_array_dimension_.height *
-                                            (zoom_ratio - 1.0f));
-  *width = std::round(*width * zoom_ratio);
-  *height = std::round(*height * zoom_ratio);
-
-  CorrectBoundary(left, top, width, height, active_array_dimension_.width,
-                  active_array_dimension_.height);
-
-  ALOGV("%s: zoom: %f, active array: [%d x %d], rect: [%d, %d, %d, %d]",
-        __FUNCTION__, zoom_ratio, active_array_dimension_.width,
-        active_array_dimension_.height, *left, *top, *width, *height);
-}
-
-void ZoomRatioMapper::CorrectBoundary(int32_t* left, int32_t* top,
-                                      int32_t* width, int32_t* height,
-                                      int32_t bound_w, int32_t bound_h) {
-  if (left == nullptr || top == nullptr || width == nullptr ||
-      height == nullptr) {
-    ALOGE("%s, invalid params", __FUNCTION__);
-    return;
-  }
-  *left = std::max(*left, 0);
-  *left = std::min(*left, bound_w - 1);
-
-  *top = std::max(*top, 0);
-  *top = std::min(*top, bound_h - 1);
-
-  *width = std::max(*width, 1);
-  *width = std::min(*width, bound_w - *left);
-
-  *height = std::max(*height, 1);
-  *height = std::min(*height, bound_h - *top);
-}
-
-void ZoomRatioMapper::UpdateFaceRectangles(HalCameraMetadata* metadata,
-                                           const float zoom_ratio) {
+void ZoomRatioMapper::UpdatePoints(const float zoom_ratio, const uint32_t tag_id,
+                                   const Dimension& active_array_dimension,
+                                   HalCameraMetadata* metadata) {
   if (metadata == nullptr) {
     ALOGE("%s: metadata is nullptr", __FUNCTION__);
     return;
   }
   camera_metadata_ro_entry entry = {};
-  if (metadata->Get(ANDROID_STATISTICS_FACE_RECTANGLES, &entry) != OK) {
-    ALOGV("%s: ANDROID_STATISTICS_FACE_RECTANGLES not published.", __FUNCTION__);
-    return;
-  }
-  if (entry.count <= 0) {
-    ALOGV("No face found.");
-    return;
-  }
-
-  const Rect* face_rect = reinterpret_cast<const Rect*>(entry.data.i32);
-  const size_t kNumElementsInTuple = sizeof(Rect) / sizeof(int32_t);
-  std::vector<Rect> updated_face_rect(entry.count / kNumElementsInTuple);
-
-  for (size_t i = 0; i < updated_face_rect.size(); i++) {
-    int32_t left = face_rect[i].left;
-    int32_t top = face_rect[i].top;
-    int32_t width = face_rect[i].right - face_rect[i].left + 1;
-    int32_t height = face_rect[i].bottom - face_rect[i].top + 1;
-
-    RevertZoomRatio(zoom_ratio, &left, &top, &width, &height);
-
-    updated_face_rect[i].left = left;
-    updated_face_rect[i].top = top;
-    updated_face_rect[i].right = left + width - 1;
-    updated_face_rect[i].bottom = top + height - 1;
-
-    ALOGV("%s: update face rectangle [%d, %d, %d, %d] -> [%d, %d, %d, %d]",
-          __FUNCTION__, face_rect[i].left, face_rect[i].top, face_rect[i].right,
-          face_rect[i].bottom, updated_face_rect[i].left,
-          updated_face_rect[i].top, updated_face_rect[i].right,
-          updated_face_rect[i].bottom);
-  }
-  status_t res =
-      metadata->Set(ANDROID_STATISTICS_FACE_RECTANGLES,
-                    reinterpret_cast<int32_t*>(updated_face_rect.data()),
-                    updated_face_rect.size() * kNumElementsInTuple);
-  if (res != OK) {
-    ALOGE("%s: Updating face rectangle failed: %s (%d)", __FUNCTION__,
-          strerror(-res), res);
-  }
-}
-
-void ZoomRatioMapper::UpdateFaceLandmarks(HalCameraMetadata* metadata,
-                                          const float zoom_ratio) {
-  if (metadata == nullptr) {
-    ALOGE("%s: metadata is nullptr", __FUNCTION__);
-    return;
-  }
-  camera_metadata_ro_entry entry = {};
-  if (metadata->Get(ANDROID_STATISTICS_FACE_LANDMARKS, &entry) != OK) {
-    ALOGV("%s: ANDROID_STATISTICS_FACE_LANDMARKS not published.", __FUNCTION__);
+  if (metadata->Get(tag_id, &entry) != OK) {
+    ALOGV("%s: tag: %u not published.", __FUNCTION__, tag_id);
     return;
   }
 
   if (entry.count <= 0) {
-    ALOGV("No face landmarks found.");
+    ALOGV("%s: No data found, tag: %u", __FUNCTION__, tag_id);
     return;
   }
-
-  // Each landmark is composed of 6 integers
-  int32_t num_landmarks = entry.count / 6;
+  // x, y
+  const uint32_t kDataSizePerPoint = 2;
+  const uint32_t point_num = entry.count / kDataSizePerPoint;
+  std::vector<Point> points(point_num);
   uint32_t data_index = 0;
-  uint32_t num_visible_landmarks = 0;
-  std::vector<Point> landmarks(num_landmarks * 3);
 
-  for (int32_t i = 0; i < num_landmarks; i++) {
-    Point* transformed = &landmarks[num_visible_landmarks * 3];
-    const Point points[3] = {
-        {.x = static_cast<uint32_t>(entry.data.i32[data_index++]),
-         .y = static_cast<uint32_t>(entry.data.i32[data_index++])},
-        {.x = static_cast<uint32_t>(entry.data.i32[data_index++]),
-         .y = static_cast<uint32_t>(entry.data.i32[data_index++])},
-        {.x = static_cast<uint32_t>(entry.data.i32[data_index++]),
-         .y = static_cast<uint32_t>(entry.data.i32[data_index++])}};
-
-    RevertZoomRatio(zoom_ratio, &transformed[0], &points[0]);
-    RevertZoomRatio(zoom_ratio, &transformed[1], &points[1]);
-    RevertZoomRatio(zoom_ratio, &transformed[2], &points[2]);
-    ALOGV(
-        "%s: update face landmark: "
-        "x_y(%d, %d), x_y(%d, %d), x_y(%d, %d) --> "
-        "x_y(%d, %d), x_y(%d, %d), x_y(%d, %d).",
-        __FUNCTION__, points[0].x, points[0].y, points[1].x, points[1].y,
-        points[2].x, points[2].y, transformed[0].x, transformed[0].y,
-        transformed[1].x, transformed[1].y, transformed[2].x, transformed[2].y);
-
-    num_visible_landmarks++;
+  for (uint32_t i = 0; i < point_num; i++) {
+    data_index = i * kDataSizePerPoint;
+    Point* transformed = &points.at(i);
+    transformed->x = entry.data.i32[data_index];
+    transformed->y = entry.data.i32[data_index + 1];
+    utils::RevertZoomRatio(zoom_ratio, active_array_dimension, true,
+                           &transformed->x, &transformed->y);
   }
 
   status_t res = metadata->Set(
-      ANDROID_STATISTICS_FACE_LANDMARKS,
-      reinterpret_cast<int32_t*>(landmarks.data()),
-      num_visible_landmarks * 3 * (sizeof(Point) / sizeof(int32_t)));
+      tag_id, reinterpret_cast<int32_t*>(points.data()), entry.count);
 
   if (res != OK) {
-    ALOGE("%s: Updating face landmarks failed: %s (%d)", __FUNCTION__,
+    ALOGE("%s: Updating tag: %u failed: %s (%d)", __FUNCTION__, tag_id,
           strerror(-res), res);
   }
-}
-
-void ZoomRatioMapper::RevertZoomRatio(const float zoom_ratio, Point* new_point,
-                                      const Point* point) {
-  if (new_point == nullptr || point == nullptr) {
-    ALOGE("%s, invalid params", __FUNCTION__);
-    return;
-  }
-  new_point->x =
-      std::round(point->x * zoom_ratio -
-                 0.5f * active_array_dimension_.width * (zoom_ratio - 1.0f));
-  new_point->y =
-      std::round(point->y * zoom_ratio -
-                 0.5f * active_array_dimension_.height * (zoom_ratio - 1.0f));
-
-  ALOGV("%s: zoom: %f, active array: [%d x %d], point: [%d, %d]", __FUNCTION__,
-        zoom_ratio, active_array_dimension_.width,
-        active_array_dimension_.height, new_point->x, new_point->y);
 }
 
 }  // namespace google_camera_hal

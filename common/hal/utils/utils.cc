@@ -20,7 +20,6 @@
 #include "utils.h"
 
 #include <hardware/gralloc.h>
-#include <log/log.h>
 
 #include "vendor_tag_defs.h"
 
@@ -357,6 +356,28 @@ bool IsSessionParameterCompatible(const HalCameraMetadata* old_session,
   }
 
   return true;
+}
+
+void ConvertZoomRatio(const float zoom_ratio,
+                      const Dimension& active_array_dimension, int32_t* left,
+                      int32_t* top, int32_t* width, int32_t* height) {
+  if (left == nullptr || top == nullptr || width == nullptr ||
+      height == nullptr) {
+    ALOGE("%s, invalid params", __FUNCTION__);
+    return;
+  }
+
+  assert(zoom_ratio != 0);
+  *left = std::round(*left / zoom_ratio + 0.5f * active_array_dimension.width *
+                                              (1.0f - 1.0f / zoom_ratio));
+  *top = std::round(*top / zoom_ratio + 0.5f * active_array_dimension.height *
+                                            (1.0f - 1.0f / zoom_ratio));
+  *width = std::round(*width / zoom_ratio);
+  *height = std::round(*height / zoom_ratio);
+
+  if (zoom_ratio >= 1.0f) {
+    utils::ClampBoundary(active_array_dimension, left, top, width, height);
+  }
 }
 
 }  // namespace utils

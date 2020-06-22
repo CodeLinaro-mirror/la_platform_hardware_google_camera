@@ -207,6 +207,11 @@ void CameraDeviceSession::ProcessCaptureResult(
   buffers.insert(buffers.end(), result->output_buffers.begin(),
                  result->output_buffers.end());
 
+  if (result->result_metadata) {
+    std::lock_guard<std::mutex> lock(request_record_lock_);
+    pending_results_.erase(result->frame_number);
+  }
+
   {
     std::shared_lock lock(session_callback_lock_);
     session_callback_.process_capture_result(std::move(result));
@@ -236,6 +241,11 @@ void CameraDeviceSession::Notify(const NotifyMessage& result) {
         error_notified_requests_.end()) {
       return;
     }
+
+    if (result.type == MessageType::kError &&
+        result.message.error.error_code == ErrorCode::kErrorResult) {
+      pending_results_.erase(frame_number);
+    }
   }
 
   if (ATRACE_ENABLED() && result.type == MessageType::kShutter) {
@@ -253,6 +263,29 @@ void CameraDeviceSession::Notify(const NotifyMessage& result) {
 
   std::shared_lock lock(session_callback_lock_);
   session_callback_.notify(result);
+}
+
+status_t CameraDeviceSession::InitializeBufferMapper() {
+  buffer_mapper_v4_ =
+      android::hardware::graphics::mapper::V4_0::IMapper::getService();
+  if (buffer_mapper_v4_ != nullptr) {
+    return OK;
+  }
+
+  buffer_mapper_v3_ =
+      android::hardware::graphics::mapper::V3_0::IMapper::getService();
+  if (buffer_mapper_v3_ != nullptr) {
+    return OK;
+  }
+
+  buffer_mapper_v2_ =
+      android::hardware::graphics::mapper::V2_0::IMapper::getService();
+  if (buffer_mapper_v2_ != nullptr) {
+    return OK;
+  }
+
+  ALOGE("%s: Getting buffer mapper failed.", __FUNCTION__);
+  return UNKNOWN_ERROR;
 }
 
 void CameraDeviceSession::InitializeCallbacks() {
@@ -338,22 +371,17 @@ status_t CameraDeviceSession::Initialize(
   device_session_hwl_ = std::move(device_session_hwl);
   camera_allocator_hwl_ = camera_allocator_hwl;
 
-  // Initialize buffer mapper
-  buffer_mapper_v3_ =
-      android::hardware::graphics::mapper::V3_0::IMapper::getService();
-  if (buffer_mapper_v3_ == nullptr) {
-    buffer_mapper_v2_ =
-        android::hardware::graphics::mapper::V2_0::IMapper::getService();
-    if (buffer_mapper_v2_ == nullptr) {
-      ALOGE("%s: Getting buffer mapper failed.", __FUNCTION__);
-      return UNKNOWN_ERROR;
-    }
+  status_t res = InitializeBufferMapper();
+  if (res != OK) {
+    ALOGE("%s: Initialize buffer mapper failed: %s(%d)", __FUNCTION__,
+          strerror(-res), res);
+    return res;
   }
 
   InitializeCallbacks();
 
   std::unique_ptr<google_camera_hal::HalCameraMetadata> characteristics;
-  status_t res = device_session_hwl_->GetCameraCharacteristics(&characteristics);
+  res = device_session_hwl_->GetCameraCharacteristics(&characteristics);
   if (res != OK) {
     ALOGE("%s: Get camera characteristics failed: %s(%d)", __FUNCTION__,
           strerror(-res), res);
@@ -400,6 +428,33 @@ void CameraDeviceSession::InitializeZoomRatioMapper(
       active_array_size.right - active_array_size.left + 1,
       active_array_size.bottom - active_array_size.top + 1};
 
+  std::vector<uint32_t> physical_camera_ids =
+      device_session_hwl_->GetPhysicalCameraIds();
+  for (uint32_t id : physical_camera_ids) {
+    std::unique_ptr<google_camera_hal::HalCameraMetadata>
+        physical_cam_characteristics;
+    res = device_session_hwl_->GetPhysicalCameraCharacteristics(
+        id, &physical_cam_characteristics);
+    if (res != OK) {
+      ALOGE("%s: Get camera: %u characteristics failed: %s(%d)", __FUNCTION__,
+            id, strerror(-res), res);
+      return;
+    }
+
+    res = utils::GetSensorActiveArraySize(physical_cam_characteristics.get(),
+                                          &active_array_size);
+    if (res != OK) {
+      ALOGE("%s: Failed to get cam: %u, active array size: %s(%d)",
+            __FUNCTION__, id, strerror(-res), res);
+      return;
+    }
+    Dimension active_array_dimension = {
+        active_array_size.right - active_array_size.left + 1,
+        active_array_size.bottom - active_array_size.top + 1};
+    params.physical_cam_active_array_dimension.emplace(id,
+                                                       active_array_dimension);
+  }
+
   res = utils::GetZoomRatioRange(characteristics, &params.zoom_ratio_range);
   if (res != OK) {
     ALOGW("%s: Failed to get the zoom ratio range: %s(%d)", __FUNCTION__,
@@ -407,7 +462,9 @@ void CameraDeviceSession::InitializeZoomRatioMapper(
     return;
   }
 
-  zoom_ratio_mapper_.Initialize(params);
+  params.zoom_ratio_mapper_hwl = device_session_hwl_->GetZoomRatioMapperHwl();
+
+  zoom_ratio_mapper_.Initialize(&params);
 }
 
 // Returns an array of regular files under dir_path.
@@ -495,7 +552,10 @@ CameraDeviceSession::~CameraDeviceSession() {
     dlclose(lib_handle);
   }
 
-  if (buffer_mapper_v3_ != nullptr) {
+  if (buffer_mapper_v4_ != nullptr) {
+    FreeImportedBufferHandles<android::hardware::graphics::mapper::V4_0::IMapper>(
+        buffer_mapper_v4_);
+  } else if (buffer_mapper_v3_ != nullptr) {
     FreeImportedBufferHandles<android::hardware::graphics::mapper::V3_0::IMapper>(
         buffer_mapper_v3_);
   } else if (buffer_mapper_v2_ != nullptr) {
@@ -670,6 +730,7 @@ status_t CameraDeviceSession::ConfigureStreams(
       pending_request_streams_.clear();
       error_notified_requests_.clear();
       dummy_buffer_observed_.clear();
+      pending_results_.clear();
     }
   }
 
@@ -804,7 +865,12 @@ status_t CameraDeviceSession::ImportBufferHandles(
   for (auto& buffer : buffers) {
     if (!IsBufferImportedLocked(buffer.stream_id, buffer.buffer_id)) {
       status_t res = OK;
-      if (buffer_mapper_v3_ != nullptr) {
+      if (buffer_mapper_v4_ != nullptr) {
+        res = ImportBufferHandleLocked<
+            android::hardware::graphics::mapper::V4_0::IMapper,
+            android::hardware::graphics::mapper::V4_0::Error>(buffer_mapper_v4_,
+                                                              buffer);
+      } else if (buffer_mapper_v3_ != nullptr) {
         res = ImportBufferHandleLocked<
             android::hardware::graphics::mapper::V3_0::IMapper,
             android::hardware::graphics::mapper::V3_0::Error>(buffer_mapper_v3_,
@@ -857,17 +923,23 @@ status_t CameraDeviceSession::ImportRequestBufferHandles(
   return OK;
 }
 
-void CameraDeviceSession::NotifyErrorRequest(uint32_t frame_number) {
-  ALOGI(
-      "%s: [sbc] Request %d has inactive stream, return ERROR_REQUEST "
-      "immediately.",
-      __FUNCTION__, frame_number);
+void CameraDeviceSession::NotifyErrorMessage(uint32_t frame_number,
+                                             int32_t stream_id,
+                                             ErrorCode error_code) {
+  ALOGI("%s: [sbc] Request %d with stream (%d), return error code (%d)",
+        __FUNCTION__, frame_number, stream_id, error_code);
 
-  NotifyMessage message = {
-      .type = MessageType::kError,
-      .message.error = {.frame_number = frame_number,
-                        .error_stream_id = -1,
-                        .error_code = ErrorCode::kErrorRequest}};
+  if ((error_code == ErrorCode::kErrorResult ||
+       error_code == ErrorCode::kErrorRequest) &&
+      stream_id != kInvalidStreamId) {
+    ALOGW("%s: [sbc] Request %d reset setream id again", __FUNCTION__,
+          frame_number);
+    stream_id = kInvalidStreamId;
+  }
+  NotifyMessage message = {.type = MessageType::kError,
+                           .message.error = {.frame_number = frame_number,
+                                             .error_stream_id = stream_id,
+                                             .error_code = error_code}};
 
   std::shared_lock lock(session_callback_lock_);
   session_callback_.notify(message);
@@ -883,7 +955,7 @@ status_t CameraDeviceSession::TryHandleDummyResult(CaptureResult* result,
   uint32_t frame_number = result->frame_number;
   *result_handled = false;
   bool need_to_handle_result = false;
-  bool need_to_notify_error_request = false;
+  bool need_to_notify_error_result = false;
   {
     std::lock_guard<std::mutex> lock(request_record_lock_);
     if (error_notified_requests_.find(frame_number) ==
@@ -892,7 +964,10 @@ status_t CameraDeviceSession::TryHandleDummyResult(CaptureResult* result,
         if (dummy_buffer_observed_.find(stream_buffer.buffer) !=
             dummy_buffer_observed_.end()) {
           error_notified_requests_.insert(frame_number);
-          need_to_notify_error_request = true;
+          if (pending_results_.find(frame_number) != pending_results_.end()) {
+            need_to_notify_error_result = true;
+            pending_results_.erase(frame_number);
+          }
           need_to_handle_result = true;
           break;
         }
@@ -902,8 +977,8 @@ status_t CameraDeviceSession::TryHandleDummyResult(CaptureResult* result,
     }
   }
 
-  if (need_to_notify_error_request) {
-    NotifyErrorRequest(frame_number);
+  if (need_to_notify_error_result) {
+    NotifyErrorMessage(frame_number, kInvalidStreamId, ErrorCode::kErrorResult);
   }
 
   if (need_to_handle_result) {
@@ -917,6 +992,12 @@ status_t CameraDeviceSession::TryHandleDummyResult(CaptureResult* result,
 
       uint64_t buffer_id = (is_dummy_buffer ? /*Use invalid for dummy*/ 0
                                             : stream_buffer.buffer_id);
+      // To avoid publishing duplicated error buffer message, only publish
+      // it here when getting normal buffer status from HWL
+      if (stream_buffer.status == BufferStatus::kOk) {
+        NotifyErrorMessage(frame_number, stream_buffer.stream_id,
+                           ErrorCode::kErrorBuffer);
+      }
       NotifyBufferError(frame_number, stream_buffer.stream_id, buffer_id);
     }
 
@@ -1014,7 +1095,8 @@ status_t CameraDeviceSession::HandleInactiveStreams(const CaptureRequest& reques
     }
   }
   if (*all_active == false) {
-    NotifyErrorRequest(request.frame_number);
+    NotifyErrorMessage(request.frame_number, kInvalidStreamId,
+                       ErrorCode::kErrorRequest);
     NotifyBufferError(request);
   }
 
@@ -1037,6 +1119,7 @@ void CameraDeviceSession::CheckRequestForStreamBufferCacheManager(
   uint32_t frame_number = request.frame_number;
   if (*need_to_process) {
     std::lock_guard<std::mutex> lock(request_record_lock_);
+    pending_results_.insert(frame_number);
     for (auto& stream_buffer : request.output_buffers) {
       pending_request_streams_[frame_number].insert(stream_buffer.stream_id);
     }
@@ -1130,7 +1213,8 @@ status_t CameraDeviceSession::ProcessCaptureRequest(
     // If a processCaptureRequest() call is made during flushing,
     // notify CAMERA3_MSG_ERROR_REQUEST directly.
     if (is_flushing_) {
-      NotifyErrorRequest(request.frame_number);
+      NotifyErrorMessage(request.frame_number, kInvalidStreamId,
+                         ErrorCode::kErrorRequest);
       NotifyBufferError(request);
       need_to_process = false;
     } else if (buffer_management_supported_) {
@@ -1170,8 +1254,10 @@ status_t CameraDeviceSession::ProcessCaptureRequest(
         {
           std::lock_guard<std::mutex> lock(request_record_lock_);
           pending_request_streams_.erase(updated_request.frame_number);
+          pending_results_.erase(updated_request.frame_number);
         }
-        NotifyErrorRequest(updated_request.frame_number);
+        NotifyErrorMessage(updated_request.frame_number, kInvalidStreamId,
+                           ErrorCode::kErrorRequest);
         NotifyBufferError(updated_request);
         if (pending_requests_tracker_->TrackReturnedResultBuffers(buffers) !=
             OK) {
@@ -1247,7 +1333,9 @@ void CameraDeviceSession::RemoveBufferCache(
       }
     };
 
-    if (buffer_mapper_v3_ != nullptr) {
+    if (buffer_mapper_v4_ != nullptr) {
+      free_buffer_mapper(buffer_mapper_v4_);
+    } else if (buffer_mapper_v3_ != nullptr) {
       free_buffer_mapper(buffer_mapper_v3_);
     } else {
       free_buffer_mapper(buffer_mapper_v2_);
@@ -1313,7 +1401,10 @@ void CameraDeviceSession::CleanupStaleStreamsLocked(
     if (!found) {
       std::lock_guard<std::mutex> lock(imported_buffer_handle_map_lock_);
       stream_it = configured_streams_map_.erase(stream_it);
-      if (buffer_mapper_v3_ != nullptr) {
+      if (buffer_mapper_v4_ != nullptr) {
+        FreeBufferHandlesLocked<android::hardware::graphics::mapper::V4_0::IMapper>(
+            buffer_mapper_v4_, stream_id);
+      } else if (buffer_mapper_v3_ != nullptr) {
         FreeBufferHandlesLocked<android::hardware::graphics::mapper::V3_0::IMapper>(
             buffer_mapper_v3_, stream_id);
       } else {
