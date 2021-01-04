@@ -22,6 +22,7 @@
 #include <cutils/properties.h>
 #include <cutils/trace.h>
 #include <malloc.h>
+#include <utils/Trace.h>
 
 #include "hidl_camera_device_session.h"
 #include "hidl_profiler.h"
@@ -35,8 +36,6 @@ namespace V3_5 {
 namespace implementation {
 
 namespace hidl_utils = ::android::hardware::camera::implementation::hidl_utils;
-namespace hidl_profiler =
-    ::android::hardware::camera::implementation::hidl_profiler;
 
 using ::android::hardware::camera::device::V3_2::NotifyMsg;
 using ::android::hardware::camera::device::V3_2::StreamBuffer;
@@ -51,7 +50,9 @@ using ::android::hardware::thermal::V2_0::TemperatureType;
 
 std::unique_ptr<HidlCameraDeviceSession> HidlCameraDeviceSession::Create(
     const sp<V3_2::ICameraDeviceCallback>& callback,
-    std::unique_ptr<google_camera_hal::CameraDeviceSession> device_session) {
+    std::unique_ptr<google_camera_hal::CameraDeviceSession> device_session,
+    std::shared_ptr<HidlProfiler> hidl_profiler) {
+  ATRACE_NAME("HidlCameraDeviceSession::Create");
   auto session =
       std::unique_ptr<HidlCameraDeviceSession>(new HidlCameraDeviceSession());
   if (session == nullptr) {
@@ -59,7 +60,8 @@ std::unique_ptr<HidlCameraDeviceSession> HidlCameraDeviceSession::Create(
     return nullptr;
   }
 
-  status_t res = session->Initialize(callback, std::move(device_session));
+  status_t res =
+      session->Initialize(callback, std::move(device_session), hidl_profiler);
   if (res != OK) {
     ALOGE("%s: Initializing HidlCameraDeviceSession failed: %s(%d)",
           __FUNCTION__, strerror(-res), res);
@@ -70,6 +72,7 @@ std::unique_ptr<HidlCameraDeviceSession> HidlCameraDeviceSession::Create(
 }
 
 HidlCameraDeviceSession::~HidlCameraDeviceSession() {
+  ATRACE_NAME("HidlCameraDeviceSession::~HidlCameraDeviceSession");
   close();
   // camera's closing, so flush any unused malloc pages
   mallopt(M_PURGE, 0);
@@ -89,9 +92,14 @@ void HidlCameraDeviceSession::ProcessCaptureResult(
         num_pending_first_frame_buffers_ > 0) {
       num_pending_first_frame_buffers_ -= hal_result->output_buffers.size();
       if (num_pending_first_frame_buffers_ == 0) {
-        hidl_profiler::OnFirstFrameResult();
+        hidl_profiler_->FirstFrameEnd();
+        ATRACE_ASYNC_END("first_frame", 0);
       }
     }
+  }
+  for (auto& buffer : hal_result->output_buffers) {
+    hidl_profiler_->ProfileFrameRate("Stream " +
+                                     std::to_string(buffer.stream_id));
   }
 
   hidl_vec<CaptureResult> hidl_results(1);
@@ -319,9 +327,16 @@ status_t HidlCameraDeviceSession::InitializeBufferMapper() {
 
 status_t HidlCameraDeviceSession::Initialize(
     const sp<V3_2::ICameraDeviceCallback>& callback,
-    std::unique_ptr<google_camera_hal::CameraDeviceSession> device_session) {
+    std::unique_ptr<google_camera_hal::CameraDeviceSession> device_session,
+    std::shared_ptr<HidlProfiler> hidl_profiler) {
+  ATRACE_NAME("HidlCameraDeviceSession::Initialize");
   if (device_session == nullptr) {
     ALOGE("%s: device_session is nullptr.", __FUNCTION__);
+    return BAD_VALUE;
+  }
+
+  if (hidl_profiler == nullptr) {
+    ALOGE("%s: hidl_profiler is nullptr.", __FUNCTION__);
     return BAD_VALUE;
   }
 
@@ -366,6 +381,7 @@ status_t HidlCameraDeviceSession::Initialize(
 
   hidl_device_callback_ = cast_res;
   device_session_ = std::move(device_session);
+  hidl_profiler_ = hidl_profiler;
 
   SetSessionCallbacks();
   return OK;
@@ -502,6 +518,7 @@ status_t HidlCameraDeviceSession::CreateMetadataQueue(
 Return<void> HidlCameraDeviceSession::constructDefaultRequestSettings(
     RequestTemplate type,
     ICameraDeviceSession::constructDefaultRequestSettings_cb _hidl_cb) {
+  ATRACE_NAME("HidlCameraDeviceSession::constructDefaultRequestSettings");
   V3_2::CameraMetadata hidl_metadata;
 
   if (device_session_ == nullptr) {
@@ -534,13 +551,16 @@ Return<void> HidlCameraDeviceSession::constructDefaultRequestSettings(
 Return<void> HidlCameraDeviceSession::configureStreams_3_5(
     const StreamConfiguration& requestedConfiguration,
     ICameraDeviceSession::configureStreams_3_5_cb _hidl_cb) {
+  ATRACE_NAME("HidlCameraDeviceSession::configureStreams_3_5");
   HalStreamConfiguration hidl_hal_configs;
   if (device_session_ == nullptr) {
     _hidl_cb(Status::ILLEGAL_ARGUMENT, hidl_hal_configs);
     return Void();
   }
 
-  auto profiler_item = hidl_profiler::OnCameraStreamConfigure();
+  auto profiler = hidl_profiler_->MakeScopedProfiler(
+      HidlProfiler::ScopedType::kConfigureStream);
+
   first_frame_requested_ = false;
   num_pending_first_frame_buffers_ = 0;
 
@@ -590,10 +610,14 @@ Return<void> HidlCameraDeviceSession::processCaptureRequest_3_4(
     return Void();
   }
 
+  bool profile_first_request = false;
   if (!first_frame_requested_) {
     first_frame_requested_ = true;
+    profile_first_request = true;
+    ATRACE_BEGIN("HidlCameraDeviceSession::FirstRequest");
     num_pending_first_frame_buffers_ = requests[0].v3_2.outputBuffers.size();
-    hidl_profiler::OnFirstFrameRequest();
+    hidl_profiler_->FirstFrameStart();
+    ATRACE_ASYNC_BEGIN("first_frame", 0);
   }
 
   std::vector<google_camera_hal::BufferCache> hal_buffer_caches;
@@ -602,6 +626,9 @@ Return<void> HidlCameraDeviceSession::processCaptureRequest_3_4(
       hidl_utils::ConvertToHalBufferCaches(cachesToRemove, &hal_buffer_caches);
   if (res != OK) {
     _hidl_cb(Status::ILLEGAL_ARGUMENT, 0);
+    if (profile_first_request) {
+      ATRACE_END();
+    }
     return Void();
   }
 
@@ -617,6 +644,9 @@ Return<void> HidlCameraDeviceSession::processCaptureRequest_3_4(
       ALOGE("%s: Converting to HAL capture request failed: %s(%d)",
             __FUNCTION__, strerror(-res), res);
       _hidl_cb(hidl_utils::ConvertToHidlStatus(res), 0);
+      if (profile_first_request) {
+        ATRACE_END();
+      }
       return Void();
     }
 
@@ -635,6 +665,9 @@ Return<void> HidlCameraDeviceSession::processCaptureRequest_3_4(
   }
 
   _hidl_cb(hidl_utils::ConvertToHidlStatus(res), num_processed_requests);
+  if (profile_first_request) {
+    ATRACE_END();
+  }
   return Void();
 }
 
@@ -645,11 +678,13 @@ Return<void> HidlCameraDeviceSession::signalStreamFlush(
 }
 
 Return<Status> HidlCameraDeviceSession::flush() {
+  ATRACE_NAME("HidlCameraDeviceSession::flush");
   if (device_session_ == nullptr) {
     return Status::INTERNAL_ERROR;
   }
 
-  auto profiler_item = hidl_profiler::OnCameraFlush();
+  auto profiler =
+      hidl_profiler_->MakeScopedProfiler(HidlProfiler::ScopedType::kFlush);
 
   status_t res = device_session_->Flush();
   if (res != OK) {
@@ -662,8 +697,10 @@ Return<Status> HidlCameraDeviceSession::flush() {
 }
 
 Return<void> HidlCameraDeviceSession::close() {
+  ATRACE_NAME("HidlCameraDeviceSession::close");
   if (device_session_ != nullptr) {
-    auto profiler_item = hidl_profiler::OnCameraClose();
+    auto profiler =
+        hidl_profiler_->MakeScopedProfiler(HidlProfiler::ScopedType::kClose);
     device_session_ = nullptr;
   }
   return Void();
@@ -673,6 +710,7 @@ Return<void> HidlCameraDeviceSession::isReconfigurationRequired(
     const V3_2::CameraMetadata& oldSessionParams,
     const V3_2::CameraMetadata& newSessionParams,
     ICameraDeviceSession::isReconfigurationRequired_cb _hidl_cb) {
+  ATRACE_NAME("HidlCameraDeviceSession::isReconfigurationRequired");
   std::unique_ptr<google_camera_hal::HalCameraMetadata> old_hal_session_metadata;
   status_t res = hidl_utils::ConvertToHalMetadata(0, nullptr, oldSessionParams,
                                                   &old_hal_session_metadata);

@@ -74,6 +74,13 @@ class ProfilerImpl : public Profiler {
   // Print out the profiling result in the standard output (ANDROID_LOG_ERROR).
   virtual void PrintResult() override;
 
+  // Profile the frame rate
+  virtual void ProfileFrameRate(const std::string&) override final;
+
+  // Set the interval of FPS print
+  // The unit is second and interval_seconds must >= 1
+  virtual void SetFpsPrintInterval(int32_t interval_seconds) override final;
+
  protected:
   // A structure to hold start time, end time, and count of profiling code
   // snippet.
@@ -91,16 +98,20 @@ class ProfilerImpl : public Profiler {
     float max_dt;
     float avg_dt;
     float avg_count;
-    TimeResult(std::string node_name, float max_dt, float avg_dt, float count)
+    float fps;
+    TimeResult(std::string node_name, float max_dt, float avg_dt, float count,
+               float fps)
         : node_name(node_name),
           max_dt(max_dt),
           avg_dt(avg_dt),
-          avg_count(count) {
+          avg_count(count),
+          fps(fps) {
     }
   };
 
   using TimeSeries = std::vector<TimeSlot>;
   using NodeTimingMap = std::unordered_map<std::string, TimeSeries>;
+  using NodeFrameRateMap = std::unordered_map<std::string, TimeSlot>;
 
   static constexpr int64_t kNsPerSec = 1000000000;
   static constexpr float kNanoToMilli = 0.000001f;
@@ -109,6 +120,10 @@ class ProfilerImpl : public Profiler {
   SetPropFlag setting_;
   // The map to record the timing of all nodes.
   NodeTimingMap timing_map_;
+  // The map to record the timing to print fps when close.
+  NodeFrameRateMap frame_rate_map_;
+  // The map to record the timing to print fps per second.
+  NodeFrameRateMap realtime_frame_rate_map_;
   // Use case name.
   std::string use_case_;
   // The prefix for the dump filename.
@@ -135,7 +150,9 @@ class ProfilerImpl : public Profiler {
   // Dump the result to the disk.
   // Argument:
   //   filepath: file path to dump file.
-  void DumpResult(std::string filepath);
+  virtual void DumpResult(std::string filepath);
+
+  int32_t fps_print_interval_seconds_ = 1;
 };
 
 ProfilerImpl::~ProfilerImpl() {
@@ -171,19 +188,70 @@ void ProfilerImpl::SetDumpFilePrefix(std::string dump_file_prefix) {
   }
 }
 
+void ProfilerImpl::SetFpsPrintInterval(int32_t interval_seconds) {
+  if (interval_seconds < 1) {
+    ALOGE("Wrong interval: %d, must >= 1", interval_seconds);
+    return;
+  }
+  fps_print_interval_seconds_ = interval_seconds;
+}
+
+void ProfilerImpl::ProfileFrameRate(const std::string& name) {
+  std::lock_guard<std::mutex> lk(lock_);
+  // Save the timeing for each whole process
+  TimeSlot& frame_rate = frame_rate_map_[name];
+  if (frame_rate.start == 0) {
+    frame_rate.start = CurrentTime();
+    frame_rate.count = 0;
+    frame_rate.end = 0;
+  } else {
+    ++frame_rate.count;
+    frame_rate.end = CurrentTime();
+  }
+
+  if ((setting_ & SetPropFlag::kPrintFpsPerIntervalBit) == 0) {
+    return;
+  }
+  // Print FPS every second
+  TimeSlot& realtime_frame_rate = realtime_frame_rate_map_[name];
+  if (realtime_frame_rate.start == 0) {
+    realtime_frame_rate.start = CurrentTime();
+    realtime_frame_rate.count = 0;
+  } else {
+    ++realtime_frame_rate.count;
+    int64_t current = CurrentTime();
+    int64_t elapsed = current - realtime_frame_rate.start;
+    if (elapsed > kNsPerSec * fps_print_interval_seconds_) {
+      float fps =
+          realtime_frame_rate.count * kNsPerSec / static_cast<float>(elapsed);
+      float avg_fps = frame_rate.count * kNsPerSec /
+                      static_cast<float>(frame_rate.end - frame_rate.start);
+      ALOGE("%s: current FPS %3.2f, avg %3.2f", name.c_str(), fps, avg_fps);
+      realtime_frame_rate.count = 0;
+      realtime_frame_rate.start = current;
+    }
+  }
+}
+
 void ProfilerImpl::Start(const std::string name, int request_id) {
   if (setting_ == SetPropFlag::kDisable) {
     return;
   }
   int index = (request_id == kInvalidRequestId ? 0 : request_id);
 
-  std::lock_guard<std::mutex> lk(lock_);
-  TimeSeries& time_series = timing_map_[name];
-  for (int i = time_series.size(); i <= index; i++) {
-    time_series.push_back(TimeSlot());
+  {
+    std::lock_guard<std::mutex> lk(lock_);
+    TimeSeries& time_series = timing_map_[name];
+    for (int i = time_series.size(); i <= index; ++i) {
+      time_series.push_back(TimeSlot());
+    }
+    TimeSlot& slot = time_series[index];
+    slot.start += CurrentTime();
   }
-  TimeSlot& slot = time_series[index];
-  slot.start += CurrentTime();
+
+  if ((setting_ & SetPropFlag::kCalculateFpsOnEndBit) == 0) {
+    ProfileFrameRate(name);
+  }
 }
 
 void ProfilerImpl::End(const std::string name, int request_id) {
@@ -192,12 +260,17 @@ void ProfilerImpl::End(const std::string name, int request_id) {
   }
   int index = (request_id == kInvalidRequestId ? 0 : request_id);
 
-  std::lock_guard<std::mutex> lk(lock_);
+  {
+    std::lock_guard<std::mutex> lk(lock_);
+    if (index < timing_map_[name].size()) {
+      TimeSlot& slot = timing_map_[name][index];
+      slot.end += CurrentTime();
+      ++slot.count;
+    }
+  }
 
-  if (index < timing_map_[name].size()) {
-    TimeSlot& slot = timing_map_[name][index];
-    slot.end += CurrentTime();
-    slot.count++;
+  if ((setting_ & SetPropFlag::kCalculateFpsOnEndBit) != 0) {
+    ProfileFrameRate(name);
   }
 }
 
@@ -234,15 +307,30 @@ void ProfilerImpl::PrintResult() {
     sum_max += max_dt;
     max_max = std::max(max_max, max_dt);
 
-    time_results.push_back({node_name, max_dt, avg * avg_count, avg_count});
+    TimeSlot& frame_rate = frame_rate_map_[node_name];
+    int64_t duration = frame_rate.end - frame_rate.start;
+    float fps = 0;
+    if (duration > kNsPerSec) {
+      fps = frame_rate.count * kNsPerSec / static_cast<float>(duration);
+    }
+    time_results.push_back({node_name, max_dt, avg * avg_count, avg_count, fps});
   }
 
   std::sort(time_results.begin(), time_results.end(),
             [](auto a, auto b) { return a.avg_dt > b.avg_dt; });
 
   for (const auto it : time_results) {
-    ALOGE("%51.51s Max: %8.3f ms       Avg: %7.3f ms (Count = %3.1f)",
+    if (it.fps == 0) {
+      ALOGE(
+          "%51.51s Max: %8.3f ms       Avg: %7.3f ms (Count = %3.1f) fps:    "
+          "NA",
           it.node_name.c_str(), it.max_dt, it.avg_dt, it.avg_count);
+    } else {
+      ALOGE(
+          "%51.51s Max: %8.3f ms       Avg: %7.3f ms (Count = %3.1f) fps: "
+          "%8.2f",
+          it.node_name.c_str(), it.max_dt, it.avg_dt, it.avg_count, it.fps);
+    }
   }
 
   ALOGE("%43.43s     MAX SUM: %8.3f ms,  AVG SUM: %7.3f ms", "", sum_max,
@@ -258,6 +346,18 @@ void ProfilerImpl::DumpResult(std::string filepath) {
         float elapsed = static_cast<float>(time_slot.end - time_slot.start) /
                         std::max(1, time_slot.count);
         fout << elapsed * kNanoToMilli << " ";
+      }
+      fout << "\n";
+      TimeSlot& frame_rate = frame_rate_map_[node_name];
+      int64_t duration = frame_rate.end - frame_rate.start;
+      float fps = 0;
+      if (duration > kNsPerSec) {
+        fps = frame_rate.count * kNsPerSec / static_cast<float>(duration);
+      }
+      if (fps > 0) {
+        fout << node_name << " fps:" << fps;
+      } else {
+        fout << node_name << " fps: NA";
       }
       fout << "\n";
     }
@@ -278,7 +378,12 @@ class ProfilerStopwatchImpl : public ProfilerImpl {
       // it by ourself.
       PrintResult();
       // Erase the print bit to prevent parent class print again.
-      setting_ = static_cast<SetPropFlag>(setting_ & (!SetPropFlag::kPrintBit));
+      setting_ = static_cast<SetPropFlag>(setting_ & (~SetPropFlag::kPrintBit));
+    }
+    if (setting_ & SetPropFlag::kDumpBit) {
+      DumpResult(dump_file_prefix_ + use_case_ + "-TS" +
+                 std::to_string(object_init_time_) + ".txt");
+      setting_ = static_cast<SetPropFlag>(setting_ & (~SetPropFlag::kDumpBit));
     }
   }
 
@@ -309,6 +414,19 @@ class ProfilerStopwatchImpl : public ProfilerImpl {
 
     ALOGE("");
   }
+
+  void DumpResult(std::string filepath) override {
+    if (std::ofstream fout(filepath, std::ios::out); fout.is_open()) {
+      for (const auto& [node_name, time_series] : timing_map_) {
+        fout << node_name << " ";
+        for (const auto& slot : time_series) {
+          fout << (slot.end - slot.start) * kNanoToMilli << " ";
+        }
+        fout << "\n";
+      }
+      fout.close();
+    }
+  }
 };
 
 // Dummpy profiler class.
@@ -330,6 +448,12 @@ class ProfilerDummy : public Profiler {
   }
 
   void PrintResult() override final {
+  }
+
+  void ProfileFrameRate(const std::string&) override final {
+  }
+
+  void SetFpsPrintInterval(int32_t) override final {
   }
 };
 

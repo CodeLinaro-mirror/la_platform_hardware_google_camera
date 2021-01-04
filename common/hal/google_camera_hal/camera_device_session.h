@@ -29,6 +29,7 @@
 #include "capture_session.h"
 #include "hal_camera_metadata.h"
 #include "hal_types.h"
+#include "hwl_types.h"
 #include "pending_requests_tracker.h"
 #include "stream_buffer_cache_manager.h"
 #include "thermal_types.h"
@@ -71,7 +72,7 @@ using CaptureSessionCreateFunc = std::function<std::unique_ptr<CaptureSession>(
     CameraDeviceSessionHwl* device_session_hwl,
     const StreamConfiguration& stream_config,
     ProcessCaptureResultFunc process_capture_result, NotifyFunc notify,
-    HwlRequestBuffersFunc request_stream_buffers,
+    HwlSessionCallback session_callback,
     std::vector<HalStream>* hal_configured_streams,
     CameraBufferAllocatorHwl* camera_allocator_hwl)>;
 
@@ -97,6 +98,7 @@ class CameraDeviceSession {
   // lifetime of CameraDeviceSession
   static std::unique_ptr<CameraDeviceSession> Create(
       std::unique_ptr<CameraDeviceSessionHwl> device_session_hwl,
+      std::vector<GetCaptureSessionFactoryFunc> external_session_factory_entries,
       CameraBufferAllocatorHwl* camera_allocator_hwl = nullptr);
 
   virtual ~CameraDeviceSession();
@@ -154,8 +156,10 @@ class CameraDeviceSession {
     }
   };
 
-  status_t Initialize(std::unique_ptr<CameraDeviceSessionHwl> device_session_hwl,
-                      CameraBufferAllocatorHwl* camera_allocator_hwl);
+  status_t Initialize(
+      std::unique_ptr<CameraDeviceSessionHwl> device_session_hwl,
+      CameraBufferAllocatorHwl* camera_allocator_hwl,
+      std::vector<GetCaptureSessionFactoryFunc> external_session_factory_entries);
 
   // Initialize the latest available gralloc buffer mapper.
   status_t InitializeBufferMapper();
@@ -288,7 +292,8 @@ class CameraDeviceSession {
   void UnregisterThermalCallback();
 
   // Load HAL external capture session libraries.
-  status_t LoadExternalCaptureSession();
+  status_t LoadExternalCaptureSession(
+      std::vector<GetCaptureSessionFactoryFunc> external_session_factory_entries);
 
   void InitializeZoomRatioMapper(HalCameraMetadata* characteristics);
 
