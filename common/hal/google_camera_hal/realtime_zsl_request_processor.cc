@@ -37,14 +37,6 @@ std::unique_ptr<RealtimeZslRequestProcessor> RealtimeZslRequestProcessor::Create
     return nullptr;
   }
 
-  uint32_t num_physical_cameras =
-      device_session_hwl->GetPhysicalCameraIds().size();
-  if (num_physical_cameras > 1) {
-    ALOGE("%s: only support 1 physical camera but it has %u", __FUNCTION__,
-          num_physical_cameras);
-    return nullptr;
-  }
-
   auto request_processor = std::unique_ptr<RealtimeZslRequestProcessor>(
       new RealtimeZslRequestProcessor(pixel_format));
   if (request_processor == nullptr) {
@@ -85,10 +77,11 @@ status_t RealtimeZslRequestProcessor::Initialize(
           res);
     return res;
   }
-
-  res = characteristics->Get(VendorTagIds::kHdrUsageMode, &entry);
-  if (res == OK) {
-    hdr_mode_ = static_cast<HdrMode>(entry.data.u8[0]);
+  if (pixel_format_ == android_pixel_format_t::HAL_PIXEL_FORMAT_RAW10) {
+    res = characteristics->Get(VendorTagIds::kHdrUsageMode, &entry);
+    if (res == OK) {
+      hdr_mode_ = static_cast<HdrMode>(entry.data.u8[0]);
+    }
   }
 
   return OK;
@@ -210,7 +203,8 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
         HalCameraMetadata::Clone(physical_metadata.get());
   }
 
-  if (is_hdrplus_zsl_enabled_) {
+  if (is_hdrplus_zsl_enabled_ ||
+      pixel_format_ == android_pixel_format_t::HAL_PIXEL_FORMAT_YCBCR_420_888) {
     // Get one bffer from internal stream manager
     StreamBuffer buffer = {};
     status_t result;
@@ -228,7 +222,7 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
       block_request.output_buffers.push_back(buffer);
     }
 
-    if (block_request.settings != nullptr) {
+    if (block_request.settings != nullptr && is_hdrplus_zsl_enabled_) {
       bool enable_hybrid_ae =
           (hdr_mode_ == HdrMode::kNonHdrplusMode ? false : true);
       result = hal_utils::ModifyRealtimeRequestForHdrplus(
@@ -251,7 +245,6 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
 
   std::vector<ProcessBlockRequest> block_requests(1);
   block_requests[0].request = std::move(block_request);
-
   return process_block_->ProcessRequests(block_requests, request);
 }
 
