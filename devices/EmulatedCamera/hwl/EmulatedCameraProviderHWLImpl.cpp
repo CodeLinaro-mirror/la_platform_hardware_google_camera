@@ -288,6 +288,9 @@ status_t EmulatedCameraProviderHwlImpl::IsConcurrentStreamCombinationSupported(
 
     auto stream_configuration_map = std::make_unique<StreamConfigurationMap>(
         *(static_metadata_[config.camera_id]));
+    auto stream_configuration_map_max_resolution =
+        std::make_unique<StreamConfigurationMap>(
+            *(static_metadata_[config.camera_id]), /*maxResolution*/ true);
 
     LogicalCharacteristics sensor_chars;
     status_t ret =
@@ -300,12 +303,18 @@ status_t EmulatedCameraProviderHwlImpl::IsConcurrentStreamCombinationSupported(
     }
 
     PhysicalStreamConfigurationMap physical_stream_configuration_map;
+    PhysicalStreamConfigurationMap physical_stream_configuration_map_max_resolution;
     auto const& physicalCameraInfo = camera_id_map_[config.camera_id];
     for (size_t i = 0; i < physicalCameraInfo.size(); i++) {
       uint32_t physical_camera_id = physicalCameraInfo[i].second;
       physical_stream_configuration_map.emplace(
           physical_camera_id, std::make_unique<StreamConfigurationMap>(
                                   *(static_metadata_[physical_camera_id])));
+
+      physical_stream_configuration_map_max_resolution.emplace(
+          physical_camera_id,
+          std::make_unique<StreamConfigurationMap>(
+              *(static_metadata_[physical_camera_id]), /*maxResolution*/ true));
 
       ret = GetSensorCharacteristics(static_metadata_[physical_camera_id].get(),
                                      &sensor_chars[physical_camera_id]);
@@ -318,8 +327,9 @@ status_t EmulatedCameraProviderHwlImpl::IsConcurrentStreamCombinationSupported(
 
     if (!EmulatedSensor::IsStreamCombinationSupported(
             config.camera_id, config.stream_configuration,
-            *stream_configuration_map, physical_stream_configuration_map,
-            sensor_chars)) {
+            *stream_configuration_map, *stream_configuration_map_max_resolution,
+            physical_stream_configuration_map,
+            physical_stream_configuration_map_max_resolution, sensor_chars)) {
       return OK;
     }
   }
@@ -690,7 +700,7 @@ status_t EmulatedCameraProviderHwlImpl::Initialize() {
   size_t logical_id = 0;
   std::vector<const char*> configurationFileLocation;
   char prop[PROPERTY_VALUE_MAX];
-  if (!property_get_bool("ro.kernel.qemu", false)) {
+  if (!property_get_bool("ro.boot.qemu", false)) {
     for (const auto& iter : kConfigurationFileLocation) {
       configurationFileLocation.emplace_back(iter);
     }

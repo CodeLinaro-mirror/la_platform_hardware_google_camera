@@ -120,6 +120,8 @@ struct Stream {
   uint32_t physical_camera_id = 0;
   uint32_t buffer_size = 0;
   int32_t group_id = -1;
+  bool used_in_max_resolution_mode = false;
+  bool used_in_default_resolution_mode = true;
 };
 
 // See the definition of
@@ -130,12 +132,13 @@ enum class StreamConfigurationMode : uint32_t {
 };
 
 // See the definition of
-// ::android::hardware::camera::device::V3_5::StreamConfiguration;
+// ::android::hardware::camera::device::V3_7::StreamConfiguration;
 struct StreamConfiguration {
   std::vector<Stream> streams;
   StreamConfigurationMode operation_mode;
   std::unique_ptr<HalCameraMetadata> session_params;
   uint32_t stream_config_counter = 0;
+  bool multi_resolution_input_image = false;
 };
 
 struct CameraIdAndStreamConfiguration {
@@ -209,8 +212,8 @@ struct CaptureRequest {
   std::unordered_map<uint32_t, std::unique_ptr<HalCameraMetadata>>
       physical_camera_settings;
 
-  int32_t input_width;
-  int32_t input_height;
+  uint32_t input_width;
+  uint32_t input_height;
 };
 
 // See the definition of
