@@ -20,13 +20,16 @@
 #include <android/hardware/graphics/mapper/2.0/IMapper.h>
 #include <android/hardware/graphics/mapper/3.0/IMapper.h>
 #include <android/hardware/graphics/mapper/4.0/IMapper.h>
+
 #include <memory>
 #include <set>
 #include <shared_mutex>
+#include <vector>
 
 #include "camera_buffer_allocator_hwl.h"
 #include "camera_device_session_hwl.h"
 #include "capture_session.h"
+#include "capture_session_utils.h"
 #include "hal_camera_metadata.h"
 #include "hal_types.h"
 #include "hwl_types.h"
@@ -60,26 +63,6 @@ struct ThermalCallback {
 
   // Unregister the thermal changed callback.
   UnregisterThermalChangedCallbackFunc unregister_thermal_changed_callback;
-};
-
-// Session function invoked to query if particular stream config supported
-using StreamConfigSupportedFunc =
-    std::function<bool(CameraDeviceSessionHwl* device_session_hwl,
-                       const StreamConfiguration& stream_config)>;
-
-// Session function invoked to create session instance
-using CaptureSessionCreateFunc = std::function<std::unique_ptr<CaptureSession>(
-    CameraDeviceSessionHwl* device_session_hwl,
-    const StreamConfiguration& stream_config,
-    ProcessCaptureResultFunc process_capture_result, NotifyFunc notify,
-    HwlSessionCallback session_callback,
-    std::vector<HalStream>* hal_configured_streams,
-    CameraBufferAllocatorHwl* camera_allocator_hwl)>;
-
-// define entry points to capture session
-struct CaptureSessionEntryFuncs {
-  StreamConfigSupportedFunc IsStreamConfigurationSupported;
-  CaptureSessionCreateFunc CreateSession;
 };
 
 // Entry point for getting an external capture session.
@@ -297,6 +280,10 @@ class CameraDeviceSession {
 
   void InitializeZoomRatioMapper(HalCameraMetadata* characteristics);
 
+  // For all the stream ID groups, derive the mapping between all stream IDs
+  // within that group to one single stream ID for easier tracking.
+  void DeriveGroupedStreamIdMap();
+
   uint32_t camera_id_ = 0;
   std::unique_ptr<CameraDeviceSessionHwl> device_session_hwl_;
 
@@ -342,6 +329,12 @@ class CameraDeviceSession {
   // Protected by session_lock_.
   std::unordered_map<int32_t, Stream> configured_streams_map_;
 
+  // Map from all stream IDs within a stream group to one single stream ID for
+  // easier request/buffer tracking. For example, if a stream group contains 3
+  // streams: {1, 2, 3}, The mapping could be {2->1, 3->1}. All requests and
+  // buffers for stream 2 and stream 3 will be mapped to stream 1 for tracking.
+  std::unordered_map<int32_t, int32_t> grouped_stream_id_map_;
+
   // Last valid settings in capture request. Must be protected by session_lock_.
   std::unique_ptr<HalCameraMetadata> last_request_settings_;
 
@@ -353,6 +346,9 @@ class CameraDeviceSession {
   // If device session has notified capture session about thermal throttling.
   // Must be protected by session_lock_.
   bool thermal_throttling_notified_ = false;
+
+  // Predefined wrapper capture session entry points
+  static std::vector<WrapperCaptureSessionEntryFuncs> kWrapperCaptureSessionEntries;
 
   // Predefined capture session entry points
   static std::vector<CaptureSessionEntryFuncs> kCaptureSessionEntries;
@@ -381,6 +377,9 @@ class CameraDeviceSession {
   // Protected by session_lock_.
   bool has_valid_settings_ = false;
 
+  // If the previous output intent had a stream with video encoder usage.
+  bool prev_output_intent_has_video_ = false;
+
   // request_record_lock_ protects the following variables as noted
   std::mutex request_record_lock_;
 
@@ -404,6 +403,9 @@ class CameraDeviceSession {
   // Operation mode of stream configuration
   StreamConfigurationMode operation_mode_ = StreamConfigurationMode::kNormal;
 
+  // Whether this stream configuration is a multi-res reprocessing configuration
+  bool multi_res_reprocess_ = false;
+
   // Flush is running or not
   std::atomic<bool> is_flushing_ = false;
 
@@ -413,6 +415,10 @@ class CameraDeviceSession {
   // Record the result metadata of pending request
   // Protected by request_record_lock_;
   std::set<uint32_t> pending_results_;
+
+  // Record the shutters need to ignore for error result case
+  // Protected by request_record_lock_;
+  std::set<uint32_t> ignore_shutters_;
 
   static constexpr int32_t kInvalidStreamId = -1;
 };

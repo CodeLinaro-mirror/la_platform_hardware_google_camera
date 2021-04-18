@@ -17,34 +17,28 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "GCH_RealtimeZslRequestProcessor"
 #define ATRACE_TAG ATRACE_TAG_CAMERA
+#include "realtime_zsl_request_processor.h"
+
 #include <log/log.h>
 #include <utils/Trace.h>
 
 #include "hal_utils.h"
-#include "realtime_zsl_request_processor.h"
 #include "vendor_tag_defs.h"
 
 namespace android {
 namespace google_camera_hal {
 
 std::unique_ptr<RealtimeZslRequestProcessor> RealtimeZslRequestProcessor::Create(
-    CameraDeviceSessionHwl* device_session_hwl) {
+    CameraDeviceSessionHwl* device_session_hwl,
+    android_pixel_format_t pixel_format) {
   ATRACE_CALL();
   if (device_session_hwl == nullptr) {
     ALOGE("%s: device_session_hwl is nullptr", __FUNCTION__);
     return nullptr;
   }
 
-  uint32_t num_physical_cameras =
-      device_session_hwl->GetPhysicalCameraIds().size();
-  if (num_physical_cameras > 1) {
-    ALOGE("%s: only support 1 physical camera but it has %u", __FUNCTION__,
-          num_physical_cameras);
-    return nullptr;
-  }
-
   auto request_processor = std::unique_ptr<RealtimeZslRequestProcessor>(
-      new RealtimeZslRequestProcessor());
+      new RealtimeZslRequestProcessor(pixel_format));
   if (request_processor == nullptr) {
     ALOGE("%s: Creating RealtimeZslRequestProcessor failed.", __FUNCTION__);
     return nullptr;
@@ -83,10 +77,11 @@ status_t RealtimeZslRequestProcessor::Initialize(
           res);
     return res;
   }
-
-  res = characteristics->Get(VendorTagIds::kHdrUsageMode, &entry);
-  if (res == OK) {
-    hdr_mode_ = static_cast<HdrMode>(entry.data.u8[0]);
+  if (pixel_format_ == android_pixel_format_t::HAL_PIXEL_FORMAT_RAW10) {
+    res = characteristics->Get(VendorTagIds::kHdrUsageMode, &entry);
+    if (res == OK) {
+      hdr_mode_ = static_cast<HdrMode>(entry.data.u8[0]);
+    }
   }
 
   return OK;
@@ -106,30 +101,30 @@ status_t RealtimeZslRequestProcessor::ConfigureStreams(
     return BAD_VALUE;
   }
 
-  // Register internal raw stream
-  Stream raw_stream;
-  raw_stream.stream_type = StreamType::kOutput;
-  raw_stream.width = active_array_width_;
-  raw_stream.height = active_array_height_;
-  raw_stream.format = HAL_PIXEL_FORMAT_RAW10;
-  raw_stream.usage = 0;
-  raw_stream.rotation = StreamRotation::kRotation0;
-  raw_stream.data_space = HAL_DATASPACE_ARBITRARY;
+  // Register internal stream
+  Stream stream_to_add;
+  stream_to_add.stream_type = StreamType::kOutput;
+  stream_to_add.width = active_array_width_;
+  stream_to_add.height = active_array_height_;
+  stream_to_add.format = pixel_format_;
+  stream_to_add.usage = 0;
+  stream_to_add.rotation = StreamRotation::kRotation0;
+  stream_to_add.data_space = HAL_DATASPACE_ARBITRARY;
 
   status_t result = internal_stream_manager->RegisterNewInternalStream(
-      raw_stream, &raw_stream_id_);
+      stream_to_add, &stream_id_);
   if (result != OK) {
     ALOGE("%s: RegisterNewInternalStream failed.", __FUNCTION__);
     return UNKNOWN_ERROR;
   }
 
   internal_stream_manager_ = internal_stream_manager;
-  // Set id back to raw_stream and then HWL can get correct HAL stream ID
-  raw_stream.id = raw_stream_id_;
+  // Set id back to stream and then HWL can get correct HAL stream ID
+  stream_to_add.id = stream_id_;
 
   process_block_stream_config->streams = stream_config.streams;
-  // Add internal RAW stream
-  process_block_stream_config->streams.push_back(raw_stream);
+  // Add internal stream
+  process_block_stream_config->streams.push_back(stream_to_add);
   process_block_stream_config->operation_mode = stream_config.operation_mode;
   process_block_stream_config->session_params =
       HalCameraMetadata::Clone(stream_config.session_params.get());
@@ -208,13 +203,13 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
         HalCameraMetadata::Clone(physical_metadata.get());
   }
 
-  if (is_hdrplus_zsl_enabled_) {
-    // Get one RAW bffer from internal stream manager
+  if (is_hdrplus_zsl_enabled_ ||
+      pixel_format_ == android_pixel_format_t::HAL_PIXEL_FORMAT_YCBCR_420_888) {
+    // Get one bffer from internal stream manager
     StreamBuffer buffer = {};
     status_t result;
     if (preview_intent_seen_) {
-      result =
-          internal_stream_manager_->GetStreamBuffer(raw_stream_id_, &buffer);
+      result = internal_stream_manager_->GetStreamBuffer(stream_id_, &buffer);
       if (result != OK) {
         ALOGE("%s: frame:%d GetStreamBuffer failed.", __FUNCTION__,
               request.frame_number);
@@ -222,12 +217,12 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
       }
     }
 
-    // Add RAW output to capture request
+    // Add output to capture request
     if (preview_intent_seen_) {
       block_request.output_buffers.push_back(buffer);
     }
 
-    if (block_request.settings != nullptr) {
+    if (block_request.settings != nullptr && is_hdrplus_zsl_enabled_) {
       bool enable_hybrid_ae =
           (hdr_mode_ == HdrMode::kNonHdrplusMode ? false : true);
       result = hal_utils::ModifyRealtimeRequestForHdrplus(
@@ -250,7 +245,6 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
 
   std::vector<ProcessBlockRequest> block_requests(1);
   block_requests[0].request = std::move(block_request);
-
   return process_block_->ProcessRequests(block_requests, request);
 }
 

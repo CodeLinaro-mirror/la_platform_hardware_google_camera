@@ -88,9 +88,8 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
 
   void DestroyPipelines() override;
 
-  status_t SubmitRequests(
-      uint32_t frame_number,
-      const std::vector<HwlPipelineRequest>& requests) override;
+  status_t SubmitRequests(uint32_t frame_number,
+                          std::vector<HwlPipelineRequest>& requests) override;
 
   status_t Flush() override;
 
@@ -117,8 +116,7 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
   }  // Noop for now
 
   void SetSessionCallback(
-      const HwlSessionCallback& /*hwl_session_callback*/) override {
-  }
+      const HwlSessionCallback& hwl_session_callback) override;
 
   status_t FilterResultMetadata(HalCameraMetadata* /*metadata*/) const override {
     return OK;
@@ -151,6 +149,12 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
                       std::unique_ptr<HalCameraMetadata> static_meta);
   status_t InitializeRequestProcessor();
 
+  status_t CheckOutputFormatsForInput(
+      const HwlPipelineRequest& request,
+      const std::unordered_map<uint32_t, EmulatedStream>& streams,
+      const std::unique_ptr<StreamConfigurationMap>& stream_configuration_map,
+      android_pixel_format_t input_format);
+
   EmulatedCameraDeviceSessionHwlImpl(
       PhysicalDeviceMapPtr physical_devices,
       std::shared_ptr<EmulatedTorchState> torch_state)
@@ -168,11 +172,16 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
   std::unique_ptr<HalCameraMetadata> static_metadata_;
   std::vector<EmulatedPipeline> pipelines_;
   std::unique_ptr<EmulatedRequestProcessor> request_processor_;
-  std::unique_ptr<StreamConfigurationMap> stream_coniguration_map_;
+  std::unique_ptr<StreamConfigurationMap> stream_configuration_map_;
+  PhysicalStreamConfigurationMap physical_stream_configuration_map_;
+  PhysicalStreamConfigurationMap physical_stream_configuration_map_max_resolution_;
+  std::unique_ptr<StreamConfigurationMap> stream_configuration_map_max_resolution_;
   SensorCharacteristics sensor_chars_;
   std::shared_ptr<EmulatedTorchState> torch_state_;
   PhysicalDeviceMapPtr physical_device_map_;
   LogicalCharacteristics logical_chars_;
+  HwlSessionCallback session_callback_;
+  DynamicStreamIdMapType dynamic_stream_id_map_;
 };
 
 }  // namespace android

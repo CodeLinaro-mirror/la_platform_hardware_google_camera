@@ -42,6 +42,8 @@ status_t CreateHwlPipelineRequest(HwlPipelineRequest* hwl_request,
   hwl_request->settings = HalCameraMetadata::Clone(request.settings.get());
   hwl_request->input_buffers = request.input_buffers;
   hwl_request->output_buffers = request.output_buffers;
+  hwl_request->input_width = request.input_width;
+  hwl_request->input_height = request.input_height;
 
   for (auto& metadata : request.input_buffer_metadata) {
     hwl_request->input_buffer_metadata.push_back(
@@ -654,10 +656,11 @@ void DumpStreamConfiguration(const StreamConfiguration& stream_configuration,
         stream_configuration.operation_mode);
   for (uint32_t i = 0; i < stream_configuration.streams.size(); i++) {
     auto& stream = stream_configuration.streams[i];
-    ALOGI("==== [%u]stream_id %d, format %d, res %ux%u, usage %" PRIu64
-          ", is_phy %d, phy_cam_id %u",
-          i, stream.id, stream.format, stream.width, stream.height, stream.usage,
-          stream.is_physical_camera_stream, stream.physical_camera_id);
+    ALOGI("==== [%u]stream_id %d, type %d, format %d, res %ux%u, usage %" PRIu64
+          ", is_phy %d, phy_cam_id %u, group_id %d",
+          i, stream.id, stream.stream_type, stream.format, stream.width,
+          stream.height, stream.usage, stream.is_physical_camera_stream,
+          stream.physical_camera_id, stream.group_id);
   }
   ALOGI("%s", str.c_str());
 }
