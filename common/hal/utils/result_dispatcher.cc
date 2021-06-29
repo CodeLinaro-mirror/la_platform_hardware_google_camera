@@ -429,6 +429,8 @@ status_t ResultDispatcher::GetReadyShutterMessage(NotifyMessage* message) {
     return BAD_VALUE;
   }
 
+  std::lock_guard<std::mutex> lock(result_lock_);
+
   auto shutter_it = pending_shutters_.begin();
   if (shutter_it == pending_shutters_.end() || !shutter_it->second.ready) {
     // The first pending shutter is not ready.
@@ -446,11 +448,8 @@ status_t ResultDispatcher::GetReadyShutterMessage(NotifyMessage* message) {
 void ResultDispatcher::NotifyShutters() {
   ATRACE_CALL();
   NotifyMessage message = {};
-  while (true) {
-    std::lock_guard<std::mutex> lock(result_lock_);
-    if (GetReadyShutterMessage(&message) != OK) {
-      break;
-    }
+
+  while (GetReadyShutterMessage(&message) == OK) {
     ALOGV("%s: Notify shutter for frame %u timestamp %" PRIu64, __FUNCTION__,
           message.message.shutter.frame_number,
           message.message.shutter.timestamp_ns);

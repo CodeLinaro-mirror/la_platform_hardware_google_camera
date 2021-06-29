@@ -121,7 +121,7 @@ status_t PendingRequestsTracker::TrackReturnedResultBuffers(
 
       stream_pending_buffers_[stream_id]--;
       if (stream_pending_buffers_[stream_id] == 0) {
-        ALOGV("%s: stream %d all pending buffers have been returned.",
+        ALOGI("%s: stream %d all pending buffers have been returned.",
               __FUNCTION__, stream_id);
       }
     }
@@ -146,19 +146,8 @@ status_t PendingRequestsTracker::TrackReturnedAcquiredBuffers(
       }
 
       if (stream_acquired_buffers_[stream_id] == 0) {
-        if (buffer.status == BufferStatus::kOk) {
-          ALOGE("%s: stream %d should not have any pending acquired buffers.",
-                __FUNCTION__, stream_id);
-        } else {
-          // This may indicate that HAL doesn't intend to process a certain
-          // buffer, so the buffer isn't sent to pipeline and it's not
-          // explicitly allocated and recorded in buffer cache manager.
-          // The buffer still needs to return to framework with an error status
-          // if HAL doesn't process it.
-          ALOGV(
-              "%s: stream %d isn't acquired but returned with buffer status %u",
-              __FUNCTION__, stream_id, buffer.status);
-        }
+        ALOGE("%s: stream %d should not have any pending acquired buffers.",
+              __FUNCTION__, stream_id);
         // Continue to track other buffers.
         continue;
       }

@@ -40,9 +40,9 @@ class CameraDeviceSession;
 // ZslSnapshotCaptureSession implements a CaptureSession that contains two
 // process chains
 //
-//  1.SnapshotRequestProcessor->SnapshotProcessBlock->SnapshotResultProcessor
+//  1.SnapshotRequestProcessor->SnapshotProcessBlock->SnapshotResponseProcessor
 //
-//  2.RealtimeZslRequestProcessor->CaptureSessionWrapperProcessBlock->RealtimeZslResultProcessor
+//  2.PreviewZslRequestProcessor->CaptureSessionWrapperProcessBlock->PreviewZslResponseProcessor
 //                                    ||  /\
 //                                    \/  ||
 //                             embedded capture session
@@ -106,7 +106,7 @@ class ZslSnapshotCaptureSession : public CaptureSession {
       const StreamConfiguration& stream_config,
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify);
 
-  status_t SetupRealtimeProcessChain(
+  status_t SetupPreviewProcessChain(
       const StreamConfiguration& stream_config,
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify);
 
@@ -138,13 +138,13 @@ class ZslSnapshotCaptureSession : public CaptureSession {
 
   std::unique_ptr<InternalStreamManager> internal_stream_manager_;
 
-  std::unique_ptr<RealtimeZslRequestProcessor> realtime_request_processor_;
+  std::unique_ptr<RealtimeZslRequestProcessor> preview_request_processor_;
   // CaptureSessionWrapperProcessBlock will be owned and released by
   // RealtimeZslRequestProcessor.
-  CaptureSessionWrapperProcessBlock* realtime_process_block_ = nullptr;
+  CaptureSessionWrapperProcessBlock* preview_process_block_ = nullptr;
   // RealtimeZslResultProcessor will be owned and released by
   // CaptureSessionWrapperProcessBlock.
-  RealtimeZslResultProcessor* realtime_result_processor_ = nullptr;
+  RealtimeZslResultProcessor* preview_result_processor_ = nullptr;
 
   std::unique_ptr<SnapshotRequestProcessor> snapshot_request_processor_;
   // SnapshotProcessBlock will be owned and released by

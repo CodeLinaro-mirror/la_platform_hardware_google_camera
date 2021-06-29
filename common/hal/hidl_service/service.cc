@@ -22,15 +22,12 @@
 
 #include <android/hardware/camera/provider/2.7/ICameraProvider.h>
 #include <binder/ProcessState.h>
-#include <hidl/HidlLazyUtils.h>
-#include <hidl/HidlTransportSupport.h>
+#include <hidl/LegacySupport.h>
 #include <malloc.h>
-#include <utils/Errors.h>
 
-#include "hidl_camera_provider.h"
-
-using ::android::hardware::camera::provider::V2_7::ICameraProvider;
-using ::android::hardware::camera::provider::V2_7::implementation::HidlCameraProvider;
+using android::hardware::defaultLazyPassthroughServiceImplementation;
+using android::hardware::defaultPassthroughServiceImplementation;
+using android::hardware::camera::provider::V2_7::ICameraProvider;
 
 #ifdef LAZY_SERVICE
 const bool kLazyService = true;
@@ -44,29 +41,15 @@ int main() {
   // /dev/vndbinder
   mallopt(M_DECAY_TIME, 1);
   android::ProcessState::initWithDriver("/dev/vndbinder");
-  android::hardware::configureRpcThreadpool(/*maxThreads=*/6,
-                                            /*callerWillJoin=*/true);
-
-  android::sp<ICameraProvider> camera_provider = HidlCameraProvider::Create();
-  if (camera_provider == nullptr) {
-    return android::NO_INIT;
-  }
+  int res;
   if (kLazyService) {
-    android::hardware::LazyServiceRegistrar& lazy_registrar =
-        android::hardware::LazyServiceRegistrar::getInstance();
-    if (lazy_registrar.registerService(camera_provider, "internal/0") !=
-        android::OK) {
-      ALOGE("Cannot register Google camera provider lazy service");
-      return android::NO_INIT;
-    }
+    res = defaultLazyPassthroughServiceImplementation<ICameraProvider>(
+        "internal/0", /*maxThreads*/ 6);
   } else {
-    if (camera_provider->registerAsService("internal/0") != android::OK) {
-      ALOGE("Cannot register Google camera provider service");
-      return android::NO_INIT;
-    }
+    res = defaultPassthroughServiceImplementation<ICameraProvider>(
+        "internal/0", /*maxThreads*/ 6);
   }
-  android::hardware::joinRpcThreadpool();
 
-  // In normal operation, the threadpool should never return.
-  return EXIT_FAILURE;
+  ALOGE("Google camera provider service ending with res %d", res);
+  return res;
 }

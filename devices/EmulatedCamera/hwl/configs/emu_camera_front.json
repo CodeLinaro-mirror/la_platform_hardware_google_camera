@@ -1071,7 +1071,10 @@
   ],
   "android.sensor.availableTestPatternModes": [
    "0", 
-   "5"
+   "1", 
+   "2", 
+   "3", 
+   "4"
   ], 
   "android.sensor.blackLevelPattern": [
    "64", 
@@ -2400,7 +2403,10 @@
   ], 
   "android.sensor.availableTestPatternModes": [
    "0", 
-   "5"
+   "1", 
+   "2", 
+   "3", 
+   "4"
   ], 
   "android.sensor.blackLevelPattern": [
    "64", 
@@ -3765,7 +3771,10 @@
   ], 
   "android.sensor.availableTestPatternModes": [
    "0", 
-   "5"
+   "1", 
+   "2", 
+   "3", 
+   "4"
   ], 
   "android.sensor.blackLevelPattern": [
    "64", 

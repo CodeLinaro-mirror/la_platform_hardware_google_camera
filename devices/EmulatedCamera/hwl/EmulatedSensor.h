@@ -214,8 +214,6 @@ class EmulatedSensor : private Thread, public virtual RefBase {
     bool report_edge_mode = false;
     uint8_t edge_mode = ANDROID_EDGE_MODE_OFF;
     uint8_t sensor_pixel_mode = ANDROID_SENSOR_PIXEL_MODE_DEFAULT;
-    uint8_t test_pattern_mode = ANDROID_SENSOR_TEST_PATTERN_MODE_OFF;
-    uint32_t test_pattern_data[4] = {0, 0, 0, 0};
   };
 
   // Maps physical and logical camera ids to individual device settings
@@ -328,18 +326,16 @@ class EmulatedSensor : private Thread, public virtual RefBase {
   static EmulatedScene::ColorChannels GetQuadBayerColor(uint32_t x, uint32_t y);
 
   static void RemosaicQuadBayerBlock(uint16_t* img_in, uint16_t* img_out,
-                                     int xstart, int ystart,
-                                     int row_stride_in_bytes);
+                                     int xstart, int ystart, int stride);
 
   static status_t RemosaicRAW16Image(uint16_t* img_in, uint16_t* img_out,
-                                     size_t row_stride_in_bytes,
                                      const SensorCharacteristics& chars);
 
-  void CaptureRawBinned(uint8_t* img, size_t row_stride_in_bytes, uint32_t gain,
+  void CaptureRawBinned(uint8_t* img, uint32_t gain,
                         const SensorCharacteristics& chars);
 
-  void CaptureRawFullRes(uint8_t* img, size_t row_stride_in_bytes,
-                         uint32_t gain, const SensorCharacteristics& chars);
+  void CaptureRawFullRes(uint8_t* img, uint32_t gain,
+                         const SensorCharacteristics& chars);
 
   enum RGBLayout { RGB, RGBA, ARGB };
   void CaptureRGB(uint8_t* img, uint32_t width, uint32_t height,

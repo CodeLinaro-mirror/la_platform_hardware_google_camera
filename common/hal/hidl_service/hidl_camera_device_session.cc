@@ -91,13 +91,11 @@ void HidlCameraDeviceSession::ProcessCaptureResult(
   {
     std::lock_guard<std::mutex> pending_lock(pending_first_frame_buffers_mutex_);
     if (!hal_result->output_buffers.empty() &&
-        num_pending_first_frame_buffers_ > 0 &&
-        first_request_frame_number_ == hal_result->frame_number) {
+        num_pending_first_frame_buffers_ > 0) {
       num_pending_first_frame_buffers_ -= hal_result->output_buffers.size();
       if (num_pending_first_frame_buffers_ == 0) {
         hidl_profiler_->FirstFrameEnd();
         ATRACE_ASYNC_END("first_frame", 0);
-        ATRACE_ASYNC_END("switch_mode", 0);
       }
     }
   }
@@ -621,7 +619,6 @@ Return<void> HidlCameraDeviceSession::processCaptureRequest_3_7(
     ATRACE_BEGIN("HidlCameraDeviceSession::FirstRequest");
     num_pending_first_frame_buffers_ =
         requests[0].v3_4.v3_2.outputBuffers.size();
-    first_request_frame_number_ = requests[0].v3_4.v3_2.frameNumber;
     hidl_profiler_->FirstFrameStart();
     ATRACE_ASYNC_BEGIN("first_frame", 0);
   }
@@ -685,7 +682,6 @@ Return<void> HidlCameraDeviceSession::signalStreamFlush(
 
 Return<Status> HidlCameraDeviceSession::flush() {
   ATRACE_NAME("HidlCameraDeviceSession::flush");
-  ATRACE_ASYNC_BEGIN("switch_mode", 0);
   if (device_session_ == nullptr) {
     return Status::INTERNAL_ERROR;
   }

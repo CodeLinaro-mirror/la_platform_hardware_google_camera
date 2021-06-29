@@ -24,12 +24,10 @@ package {
 }
 
 cc_library_shared {
-    name:
-      "lib_profiler",
+    name: "lib_profiler",
 
     srcs: [
         "profiler.cc",
-        "profiler.proto",
     ],
 
     include_dirs: ["."],
@@ -38,11 +36,6 @@ cc_library_shared {
         "-Werror",
         "-Wall",
     ],
-
-    proto: {
-        type: "lite",
-        export_proto_headers: true,
-    },
 
     shared_libs: [
         "libcutils",
@@ -53,6 +46,6 @@ cc_library_shared {
     export_include_dirs: ["."],
 
     owner: "google",
-    vendor: true,
+    vendor_available: true,
     host_supported: true,
 }
