@@ -40,9 +40,9 @@ class CameraDeviceSession;
 // ZslSnapshotCaptureSession implements a CaptureSession that contains two
 // process chains
 //
-//  1.SnapshotRequestProcessor->SnapshotProcessBlock->SnapshotResponseProcessor
+//  1.SnapshotRequestProcessor->SnapshotProcessBlock->SnapshotResultProcessor
 //
-//  2.PreviewZslRequestProcessor->CaptureSessionWrapperProcessBlock->PreviewZslResponseProcessor
+//  2.RealtimeZslRequestProcessor->CaptureSessionWrapperProcessBlock->RealtimeZslResultProcessor
 //                                    ||  /\
 //                                    \/  ||
 //                             embedded capture session
@@ -106,7 +106,7 @@ class ZslSnapshotCaptureSession : public CaptureSession {
       const StreamConfiguration& stream_config,
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify);
 
-  status_t SetupPreviewProcessChain(
+  status_t SetupRealtimeProcessChain(
       const StreamConfiguration& stream_config,
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify);
 
@@ -138,13 +138,13 @@ class ZslSnapshotCaptureSession : public CaptureSession {
 
   std::unique_ptr<InternalStreamManager> internal_stream_manager_;
 
-  std::unique_ptr<RealtimeZslRequestProcessor> preview_request_processor_;
+  std::unique_ptr<RealtimeZslRequestProcessor> realtime_request_processor_;
   // CaptureSessionWrapperProcessBlock will be owned and released by
   // RealtimeZslRequestProcessor.
-  CaptureSessionWrapperProcessBlock* preview_process_block_ = nullptr;
+  CaptureSessionWrapperProcessBlock* realtime_process_block_ = nullptr;
   // RealtimeZslResultProcessor will be owned and released by
   // CaptureSessionWrapperProcessBlock.
-  RealtimeZslResultProcessor* preview_result_processor_ = nullptr;
+  RealtimeZslResultProcessor* realtime_result_processor_ = nullptr;
 
   std::unique_ptr<SnapshotRequestProcessor> snapshot_request_processor_;
   // SnapshotProcessBlock will be owned and released by
@@ -181,6 +181,9 @@ class ZslSnapshotCaptureSession : public CaptureSession {
   GetProcessBlockFactoryFunc snapshot_process_block_factory_;
   // Opened library handles that should be closed on destruction
   void* snapshot_process_block_lib_handle_ = nullptr;
+
+  // Partial result count reported by HAL
+  uint32_t partial_result_count_ = 1;
 };
 
 }  // namespace google_camera_hal
