@@ -61,7 +61,7 @@ bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
     return false;
   }
 
-  if (request.settings->Get(ANDROID_CONTROL_ENABLE_ZSL_TRUE, &entry) != OK ||
+  if (request.settings->Get(ANDROID_CONTROL_ENABLE_ZSL, &entry) != OK ||
       *entry.data.u8 != ANDROID_CONTROL_ENABLE_ZSL_TRUE) {
     ALOGV("%s: ANDROID_CONTROL_ENABLE_ZSL is not true", __FUNCTION__);
     return false;
@@ -84,12 +84,6 @@ bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
       *entry.data.u8 != ANDROID_COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY) {
     ALOGV("%s: ANDROID_COLOR_CORRECTION_ABERRATION_MODE is not HQ",
           __FUNCTION__);
-    return false;
-  }
-
-  if (request.settings->Get(ANDROID_COLOR_CORRECTION_MODE, &entry) != OK ||
-      *entry.data.u8 != ANDROID_COLOR_CORRECTION_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_COLOR_CORRECTION_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
@@ -635,11 +629,6 @@ status_t ZslSnapshotCaptureSession::Initialize(
   }
   camera_device_session_hwl_ = camera_device_session_hwl;
   hal_config_ = hal_configured_streams;
-  internal_stream_manager_ = InternalStreamManager::Create();
-  if (internal_stream_manager_ == nullptr) {
-    ALOGE("%s: Cannot create internal stream manager.", __FUNCTION__);
-    return UNKNOWN_ERROR;
-  }
 
   // Create result dispatcher
   partial_result_count_ = kPartialResult;
@@ -653,6 +642,13 @@ status_t ZslSnapshotCaptureSession::Initialize(
                                                 process_capture_result, notify);
   if (result_dispatcher_ == nullptr) {
     ALOGE("%s: Cannot create result dispatcher.", __FUNCTION__);
+    return UNKNOWN_ERROR;
+  }
+
+  internal_stream_manager_ = InternalStreamManager::Create(
+      /*buffer_allocator=*/nullptr, partial_result_count_);
+  if (internal_stream_manager_ == nullptr) {
+    ALOGE("%s: Cannot create internal stream manager.", __FUNCTION__);
     return UNKNOWN_ERROR;
   }
 
