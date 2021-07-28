@@ -63,25 +63,25 @@ bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
 
   if (request.settings->Get(ANDROID_NOISE_REDUCTION_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_EDGE_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_EDGE_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_CONTROL_EFFECT_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_CONTROL_EFFECT_MODE_OFF) {
-    ALOGV("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
+    ALOGI("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_TONEMAP_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_TONEMAP_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
@@ -388,7 +388,8 @@ status_t ZslSnapshotCaptureSession::ConfigureStreams(
   for (auto& hal_stream : *hal_config_) {
     if (hal_stream.id == additional_stream_id) {
       // Set the producer usage so that the buffer will be 64 byte aligned.
-      hal_stream.producer_usage |= GRALLOC_USAGE_HW_TEXTURE;
+      hal_stream.producer_usage |=
+          (GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_SW_READ_OFTEN);
     }
   }
 
