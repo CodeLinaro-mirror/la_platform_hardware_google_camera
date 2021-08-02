@@ -163,46 +163,34 @@ bool ZslSnapshotCaptureSession::IsStreamConfigurationSupported(
     return false;
   }
 
-  bool has_physical_camera_stream = false;
-  bool has_non_physical_camera_stream = false;
   bool has_jpeg_stream = false;
   bool has_preview_stream = false;
-  std::set<int> physical_camera_in_use;
+  bool has_yuv_stream = false;
   for (const auto& stream : stream_config.streams) {
     if (stream.is_physical_camera_stream) {
-      has_physical_camera_stream = true;
-      physical_camera_in_use.insert(stream.physical_camera_id);
-    } else {
-      has_non_physical_camera_stream = true;
+      ALOGE("%s: support logical camera only", __FUNCTION__);
+      return false;
     }
     if (utils::IsJPEGSnapshotStream(stream)) {
       has_jpeg_stream = true;
     } else if (utils::IsPreviewStream(stream)) {
       has_preview_stream = true;
-    } else if (!utils::IsYUVSnapshotStream(stream)) {
-      ALOGE("%s: only support preview + snapshot (+ YUV) streams", __FUNCTION__);
+    } else if (utils::IsYUVSnapshotStream(stream)) {
+      has_yuv_stream = true;
+    } else {
+      ALOGE("%s: only support preview + (snapshot and/or YUV) streams",
+            __FUNCTION__);
       return false;
     }
   }
-  if (!has_jpeg_stream) {
-    ALOGE("%s: no JPEG stream", __FUNCTION__);
+  if (!has_jpeg_stream && !has_yuv_stream) {
+    ALOGE("%s: no JPEG or YUV stream", __FUNCTION__);
     return false;
   }
 
   if (!has_preview_stream) {
     ALOGE("%s: no preview stream", __FUNCTION__);
     return false;
-  }
-
-  if (has_physical_camera_stream && has_non_physical_camera_stream) {
-    ALOGE("%s: support only physical camera or logical camera, but not both",
-          __FUNCTION__);
-    return false;
-  }
-
-  if (has_physical_camera_stream && physical_camera_in_use.size() != 1) {
-    ALOGE("%s: support only 1 physical camera, but %d have set up streams",
-          __FUNCTION__, static_cast<int>(physical_camera_in_use.size()));
   }
 
   ALOGD("%s: ZslSnapshotCaptureSession supports the stream config",
