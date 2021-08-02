@@ -41,7 +41,7 @@ int32_t GetNextAvailableStreamId() {
 }  // namespace
 
 std::unique_ptr<InternalStreamManager> InternalStreamManager::Create(
-    IHalBufferAllocator* buffer_allocator) {
+    IHalBufferAllocator* buffer_allocator, int partial_result_count) {
   ATRACE_CALL();
   auto stream_manager =
       std::unique_ptr<InternalStreamManager>(new InternalStreamManager());
@@ -50,13 +50,15 @@ std::unique_ptr<InternalStreamManager> InternalStreamManager::Create(
     return nullptr;
   }
 
-  stream_manager->Initialize(buffer_allocator);
+  stream_manager->Initialize(buffer_allocator, partial_result_count);
 
   return stream_manager;
 }
 
-void InternalStreamManager::Initialize(IHalBufferAllocator* buffer_allocator) {
+void InternalStreamManager::Initialize(IHalBufferAllocator* buffer_allocator,
+                                       int partial_result_count) {
   hwl_buffer_allocator_ = buffer_allocator;
+  partial_result_count_ = partial_result_count;
 }
 
 status_t InternalStreamManager::IsStreamRegisteredLocked(int32_t stream_id) const {
@@ -173,7 +175,8 @@ status_t InternalStreamManager::AllocateBuffersLocked(
   }
 
   auto buffer_manager = std::make_unique<ZslBufferManager>(
-      need_vendor_buffer ? hwl_buffer_allocator_ : nullptr);
+      need_vendor_buffer ? hwl_buffer_allocator_ : nullptr,
+      partial_result_count_);
   if (buffer_manager == nullptr) {
     ALOGE("%s: Failed to create a buffer manager for stream %d", __FUNCTION__,
           stream_id);
@@ -429,9 +432,14 @@ bool InternalStreamManager::IsPendingBufferEmpty(int32_t stream_id) {
 status_t InternalStreamManager::GetMostRecentStreamBuffer(
     int32_t stream_id, std::vector<StreamBuffer>* input_buffers,
     std::vector<std::unique_ptr<HalCameraMetadata>>* input_buffer_metadata,
-    uint32_t payload_frames) {
+    uint32_t payload_frames, int32_t min_filled_buffers) {
   ATRACE_CALL();
   std::lock_guard<std::mutex> lock(stream_mutex_);
+
+  if (static_cast<int32_t>(payload_frames) < min_filled_buffers) {
+    ALOGW("%s: payload frames %d is smaller than min filled buffers %d",
+          __FUNCTION__, payload_frames, min_filled_buffers);
+  }
 
   if (!IsStreamAllocatedLocked(stream_id)) {
     ALOGE("%s: Stream %d was not allocated.", __FUNCTION__, stream_id);
@@ -453,7 +461,7 @@ status_t InternalStreamManager::GetMostRecentStreamBuffer(
 
   std::vector<ZslBufferManager::ZslBuffer> filled_buffers;
   buffer_managers_[owner_stream_id]->GetMostRecentZslBuffers(
-      &filled_buffers, payload_frames, kMinFilledBuffers);
+      &filled_buffers, payload_frames, min_filled_buffers);
 
   if (filled_buffers.size() == 0) {
     ALOGE("%s: There is no input buffers.", __FUNCTION__);
@@ -557,9 +565,10 @@ status_t InternalStreamManager::ReturnFilledBuffer(uint32_t frame_number,
                                                                buffer);
 }
 
-status_t InternalStreamManager::ReturnMetadata(
-    int32_t stream_id, uint32_t frame_number,
-    const HalCameraMetadata* metadata) {
+status_t InternalStreamManager::ReturnMetadata(int32_t stream_id,
+                                               uint32_t frame_number,
+                                               const HalCameraMetadata* metadata,
+                                               int partial_result) {
   ATRACE_CALL();
   std::lock_guard<std::mutex> lock(stream_mutex_);
 
@@ -575,8 +584,8 @@ status_t InternalStreamManager::ReturnMetadata(
     return BAD_VALUE;
   }
 
-  return buffer_managers_[owner_stream_id]->ReturnMetadata(frame_number,
-                                                           metadata);
+  return buffer_managers_[owner_stream_id]->ReturnMetadata(
+      frame_number, metadata, partial_result);
 }
 
 }  // namespace google_camera_hal
