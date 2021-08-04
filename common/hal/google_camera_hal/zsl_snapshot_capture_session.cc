@@ -60,6 +60,31 @@ bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
           __FUNCTION__);
     return false;
   }
+
+  if (request.settings->Get(ANDROID_NOISE_REDUCTION_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY) {
+    ALOGV("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_EDGE_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_EDGE_MODE_HIGH_QUALITY) {
+    ALOGV("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_CONTROL_EFFECT_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_CONTROL_EFFECT_MODE_OFF) {
+    ALOGV("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_TONEMAP_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_TONEMAP_MODE_HIGH_QUALITY) {
+    ALOGV("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
   return true;
 }
 }  // namespace
@@ -254,16 +279,12 @@ status_t ZslSnapshotCaptureSession::BuildPipelines(
 
   for (uint32_t i = 0; i < hal_configured_streams->size(); i++) {
     if (hal_configured_streams->at(i).id == additional_stream_id_) {
-      if (hal_configured_streams->at(i).max_buffers < kRawMinBufferCount) {
-        hal_configured_streams->at(i).max_buffers = kRawMinBufferCount;
-      }
-      // Allocate internal raw stream buffers
-      uint32_t additional_num_buffers =
-          (hal_configured_streams->at(i).max_buffers >= kRawBufferCount)
-              ? 0
-              : (kRawBufferCount - hal_configured_streams->at(i).max_buffers);
+      // Reserve additional buffer(s).
+      hal_configured_streams->at(i).max_buffers += kAdditionalBufferNumber;
+      // Allocate internal YUV stream buffers
       res = internal_stream_manager_->AllocateBuffers(
-          hal_configured_streams->at(i), additional_num_buffers);
+          hal_configured_streams->at(i),
+          /*additional_num_buffers=*/kAdditionalBufferNumber);
       if (res != OK) {
         ALOGE("%s: AllocateBuffers failed.", __FUNCTION__);
         return UNKNOWN_ERROR;
@@ -590,11 +611,6 @@ status_t ZslSnapshotCaptureSession::Initialize(
   }
   camera_device_session_hwl_ = camera_device_session_hwl;
   hal_config_ = hal_configured_streams;
-  internal_stream_manager_ = InternalStreamManager::Create();
-  if (internal_stream_manager_ == nullptr) {
-    ALOGE("%s: Cannot create internal stream manager.", __FUNCTION__);
-    return UNKNOWN_ERROR;
-  }
 
   // Create result dispatcher
   partial_result_count_ = kPartialResult;
@@ -608,6 +624,13 @@ status_t ZslSnapshotCaptureSession::Initialize(
                                                 process_capture_result, notify);
   if (result_dispatcher_ == nullptr) {
     ALOGE("%s: Cannot create result dispatcher.", __FUNCTION__);
+    return UNKNOWN_ERROR;
+  }
+
+  internal_stream_manager_ = InternalStreamManager::Create(
+      /*buffer_allocator=*/nullptr, partial_result_count_);
+  if (internal_stream_manager_ == nullptr) {
+    ALOGE("%s: Cannot create internal stream manager.", __FUNCTION__);
     return UNKNOWN_ERROR;
   }
 
@@ -672,9 +695,13 @@ status_t ZslSnapshotCaptureSession::ProcessRequest(const CaptureRequest& request
     return BAD_VALUE;
   }
   if (IsSwDenoiseSnapshotCompatible(request)) {
-    // TODO(mhtan): Enable snapshot request processor
-    // res = snapshot_request_processor_->ProcessRequest(request);
-    res = realtime_request_processor_->ProcessRequest(request);
+    res = snapshot_request_processor_->ProcessRequest(request);
+    if (res != OK) {
+      ALOGW(
+          "%s: frame (%d) fall back to real time request for snapshot: %s (%d)",
+          __FUNCTION__, request.frame_number, strerror(-res), res);
+      res = realtime_request_processor_->ProcessRequest(request);
+    }
   } else {
     res = realtime_request_processor_->ProcessRequest(request);
   }

@@ -52,14 +52,16 @@ class SnapshotRequestProcessor : public RequestProcessor {
   // Override functions of RequestProcessor end.
 
  protected:
-  explicit SnapshotRequestProcessor(HwlRequestBuffersFunc request_stream_buffers)
-      : request_stream_buffers_(request_stream_buffers) {
+  explicit SnapshotRequestProcessor(HwlSessionCallback session_callback)
+      : session_callback_(session_callback) {
   }
 
  private:
   status_t Initialize(CameraDeviceSessionHwl* device_session_hwl,
                       int32_t yuv_stream_id);
   bool IsReadyForNextRequest();
+
+  static constexpr int kZslBufferSize = 3;
   std::mutex process_block_lock_;
 
   // Protected by process_block_lock_.
@@ -69,11 +71,8 @@ class SnapshotRequestProcessor : public RequestProcessor {
   int32_t yuv_stream_id_ = -1;
   uint32_t active_array_width_ = 0;
   uint32_t active_array_height_ = 0;
-  // The number of snapshot input buffers
-  // TODO(b/179378479): update the value with the frames we need.
-  uint32_t payload_frames_ = 5;
 
-  HwlRequestBuffersFunc request_stream_buffers_;
+  HwlSessionCallback session_callback_;
 };
 
 }  // namespace google_camera_hal
