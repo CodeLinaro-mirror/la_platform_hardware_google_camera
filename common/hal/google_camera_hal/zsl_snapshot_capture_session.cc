@@ -63,25 +63,25 @@ bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
 
   if (request.settings->Get(ANDROID_NOISE_REDUCTION_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_EDGE_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_EDGE_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_CONTROL_EFFECT_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_CONTROL_EFFECT_MODE_OFF) {
-    ALOGV("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
+    ALOGI("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
     return false;
   }
 
   if (request.settings->Get(ANDROID_TONEMAP_MODE, &entry) != OK ||
       *entry.data.u8 != ANDROID_TONEMAP_MODE_HIGH_QUALITY) {
-    ALOGV("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
+    ALOGI("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
     return false;
   }
 
@@ -163,46 +163,34 @@ bool ZslSnapshotCaptureSession::IsStreamConfigurationSupported(
     return false;
   }
 
-  bool has_physical_camera_stream = false;
-  bool has_non_physical_camera_stream = false;
   bool has_jpeg_stream = false;
   bool has_preview_stream = false;
-  std::set<int> physical_camera_in_use;
+  bool has_yuv_stream = false;
   for (const auto& stream : stream_config.streams) {
     if (stream.is_physical_camera_stream) {
-      has_physical_camera_stream = true;
-      physical_camera_in_use.insert(stream.physical_camera_id);
-    } else {
-      has_non_physical_camera_stream = true;
+      ALOGE("%s: support logical camera only", __FUNCTION__);
+      return false;
     }
     if (utils::IsJPEGSnapshotStream(stream)) {
       has_jpeg_stream = true;
     } else if (utils::IsPreviewStream(stream)) {
       has_preview_stream = true;
-    } else if (!utils::IsYUVSnapshotStream(stream)) {
-      ALOGE("%s: only support preview + snapshot (+ YUV) streams", __FUNCTION__);
+    } else if (utils::IsYUVSnapshotStream(stream)) {
+      has_yuv_stream = true;
+    } else {
+      ALOGE("%s: only support preview + (snapshot and/or YUV) streams",
+            __FUNCTION__);
       return false;
     }
   }
-  if (!has_jpeg_stream) {
-    ALOGE("%s: no JPEG stream", __FUNCTION__);
+  if (!has_jpeg_stream && !has_yuv_stream) {
+    ALOGE("%s: no JPEG or YUV stream", __FUNCTION__);
     return false;
   }
 
   if (!has_preview_stream) {
     ALOGE("%s: no preview stream", __FUNCTION__);
     return false;
-  }
-
-  if (has_physical_camera_stream && has_non_physical_camera_stream) {
-    ALOGE("%s: support only physical camera or logical camera, but not both",
-          __FUNCTION__);
-    return false;
-  }
-
-  if (has_physical_camera_stream && physical_camera_in_use.size() != 1) {
-    ALOGE("%s: support only 1 physical camera, but %d have set up streams",
-          __FUNCTION__, static_cast<int>(physical_camera_in_use.size()));
   }
 
   ALOGD("%s: ZslSnapshotCaptureSession supports the stream config",
@@ -388,7 +376,8 @@ status_t ZslSnapshotCaptureSession::ConfigureStreams(
   for (auto& hal_stream : *hal_config_) {
     if (hal_stream.id == additional_stream_id) {
       // Set the producer usage so that the buffer will be 64 byte aligned.
-      hal_stream.producer_usage |= GRALLOC_USAGE_HW_TEXTURE;
+      hal_stream.producer_usage |=
+          (GRALLOC_USAGE_HW_TEXTURE | GRALLOC_USAGE_SW_READ_OFTEN);
     }
   }
 

@@ -457,6 +457,7 @@ void CameraDeviceSession::InitializeZoomRatioMapper(
   }
 
   ZoomRatioMapper::InitParams params;
+  params.camera_id = camera_id_;
   params.active_array_dimension = {
       active_array_size.right - active_array_size.left + 1,
       active_array_size.bottom - active_array_size.top + 1};
@@ -1846,6 +1847,11 @@ void CameraDeviceSession::ReturnStreamBuffers(
   if (pending_requests_tracker_->TrackReturnedAcquiredBuffers(buffers) != OK) {
     ALOGE("%s: Tracking requested buffers failed.", __FUNCTION__);
   }
+}
+
+std::unique_ptr<google::camera_common::Profiler>
+CameraDeviceSession::GetProfiler(uint32_t camera_id, int option) {
+  return device_session_hwl_->GetProfiler(camera_id, option);
 }
 
 }  // namespace google_camera_hal
