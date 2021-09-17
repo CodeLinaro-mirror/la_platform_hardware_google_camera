@@ -23,6 +23,7 @@
 #include <utils/Trace.h>
 
 #include <cstdint>
+#include <shared_mutex>
 
 #include "hal_types.h"
 #include "hal_utils.h"
@@ -194,7 +195,8 @@ status_t RealtimeZslRequestProcessor::ConfigureStreams(
   // checked the size is supported in capture session.
   if (pixel_format_ == android_pixel_format_t::HAL_PIXEL_FORMAT_YCBCR_420_888) {
     for (const auto& stream : stream_config.streams) {
-      if (utils::IsJPEGSnapshotStream(stream)) {
+      if (utils::IsJPEGSnapshotStream(stream) ||
+          utils::IsYUVSnapshotStream(stream)) {
         if (SelectWidthAndHeight(stream.width, stream.height,
                                  *device_session_hwl_, active_array_width_,
                                  active_array_height_) != OK) {
@@ -202,7 +204,7 @@ status_t RealtimeZslRequestProcessor::ConfigureStreams(
                 __FUNCTION__);
           return BAD_VALUE;
         }
-        ALOGI("%s, JPEG size is (%d x %d), selected size is (%d x %d)",
+        ALOGI("%s, Snapshot size is (%d x %d), selected size is (%d x %d)",
               __FUNCTION__, stream.width, stream.height, active_array_width_,
               active_array_height_);
         break;
@@ -261,7 +263,7 @@ status_t RealtimeZslRequestProcessor::SetProcessBlock(
     return BAD_VALUE;
   }
 
-  std::lock_guard<std::mutex> lock(process_block_lock_);
+  std::lock_guard lock(process_block_lock_);
   if (process_block_ != nullptr) {
     ALOGE("%s: Already configured.", __FUNCTION__);
     return ALREADY_EXISTS;
@@ -274,7 +276,7 @@ status_t RealtimeZslRequestProcessor::SetProcessBlock(
 status_t RealtimeZslRequestProcessor::ProcessRequest(
     const CaptureRequest& request) {
   ATRACE_CALL();
-  std::lock_guard<std::mutex> lock(process_block_lock_);
+  std::shared_lock lock(process_block_lock_);
   if (process_block_ == nullptr) {
     ALOGE("%s: Not configured yet.", __FUNCTION__);
     return NO_INIT;
@@ -369,7 +371,7 @@ status_t RealtimeZslRequestProcessor::ProcessRequest(
 
 status_t RealtimeZslRequestProcessor::Flush() {
   ATRACE_CALL();
-  std::lock_guard<std::mutex> lock(process_block_lock_);
+  std::shared_lock lock(process_block_lock_);
   if (process_block_ == nullptr) {
     return OK;
   }

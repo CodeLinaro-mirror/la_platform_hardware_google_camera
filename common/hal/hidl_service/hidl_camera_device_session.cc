@@ -17,14 +17,14 @@
 #define LOG_TAG "GCH_HidlCameraDeviceSession"
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 //#define LOG_NDEBUG 0
-#include <log/log.h>
+#include "hidl_camera_device_session.h"
 
 #include <cutils/properties.h>
 #include <cutils/trace.h>
+#include <log/log.h>
 #include <malloc.h>
 #include <utils/Trace.h>
 
-#include "hidl_camera_device_session.h"
 #include "hidl_profiler.h"
 #include "hidl_utils.h"
 
@@ -95,6 +95,7 @@ void HidlCameraDeviceSession::ProcessCaptureResult(
         first_request_frame_number_ == hal_result->frame_number) {
       num_pending_first_frame_buffers_ -= hal_result->output_buffers.size();
       if (num_pending_first_frame_buffers_ == 0) {
+        ALOGI("%s: First frame done", __FUNCTION__);
         hidl_profiler_->FirstFrameEnd();
         ATRACE_ASYNC_END("first_frame", 0);
         ATRACE_ASYNC_END("switch_mode", 0);
@@ -690,6 +691,10 @@ Return<Status> HidlCameraDeviceSession::flush() {
     return Status::INTERNAL_ERROR;
   }
 
+  hidl_profiler_->SetLatencyProfiler(device_session_->GetProfiler(
+      hidl_profiler_->GetCameraId(), hidl_profiler_->GetLatencyFlag()));
+  hidl_profiler_->SetFpsProfiler(device_session_->GetProfiler(
+      hidl_profiler_->GetCameraId(), hidl_profiler_->GetFpsFlag()));
   auto profiler =
       hidl_profiler_->MakeScopedProfiler(HidlProfiler::ScopedType::kFlush);
 
