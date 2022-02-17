@@ -28,14 +28,14 @@ namespace android {
 namespace hardware {
 namespace camera {
 namespace device {
-namespace V3_7 {
+namespace V3_8 {
 namespace implementation {
 
 namespace hidl_utils = ::android::hardware::camera::implementation::hidl_utils;
 
 using ::android::google_camera_hal::HalCameraMetadata;
 
-const std::string HidlCameraDevice::kDeviceVersion = "3.7";
+const std::string HidlCameraDevice::kDeviceVersion = "3.8";
 
 std::unique_ptr<HidlCameraDevice> HidlCameraDevice::Create(
     std::unique_ptr<CameraDevice> google_camera_device) {
@@ -136,6 +136,26 @@ Return<Status> HidlCameraDevice::setTorchMode(TorchMode mode) {
   return hidl_utils::ConvertToHidlStatus(res);
 }
 
+Return<Status> HidlCameraDevice::turnOnTorchWithStrengthLevel(int32_t torch_strength) {
+  status_t res = google_camera_device_->TurnOnTorchWithStrengthLevel(torch_strength);
+  return hidl_utils::ConvertToHidlStatus(res);
+}
+
+Return<void> HidlCameraDevice::getTorchStrengthLevel(
+    ICameraDevice::getTorchStrengthLevel_cb _hidl_cb) {
+  int32_t torch_strength;
+  status_t res = google_camera_device_->GetTorchStrengthLevel(torch_strength);
+  if (res != OK) {
+    ALOGE("%s: Getting camera flash unit torch strength level for camera %u failed: %s(%d)",
+          __FUNCTION__, camera_id_, strerror(-res), res);
+    _hidl_cb(Status::INTERNAL_ERROR, torch_strength);
+    return Void();
+  }
+
+  _hidl_cb(Status::OK, torch_strength);
+  return Void();
+}
+
 Return<void> HidlCameraDevice::open(
     const sp<V3_2::ICameraDeviceCallback>& callback,
     ICameraDevice::open_cb _hidl_cb) {
@@ -220,7 +240,7 @@ Return<void> HidlCameraDevice::getPhysicalCameraCharacteristics(
 Return<void> HidlCameraDevice::isStreamCombinationSupported(
     const V3_4::StreamConfiguration& streams,
     ICameraDevice::isStreamCombinationSupported_cb _hidl_cb) {
-  StreamConfiguration streams3_7;
+  V3_7::StreamConfiguration streams3_7;
 
   hidl_utils::ConvertStreamConfigurationV34ToV37(streams, &streams3_7);
 
@@ -229,6 +249,16 @@ Return<void> HidlCameraDevice::isStreamCombinationSupported(
 
 Return<void> HidlCameraDevice::isStreamCombinationSupported_3_7(
     const V3_7::StreamConfiguration& streams,
+    ICameraDevice::isStreamCombinationSupported_cb _hidl_cb) {
+  StreamConfiguration streams3_8;
+
+  hidl_utils::ConvertStreamConfigurationV37ToV38(streams, &streams3_8);
+
+  return isStreamCombinationSupported_3_8(streams3_8, _hidl_cb);
+}
+
+Return<void> HidlCameraDevice::isStreamCombinationSupported_3_8(
+    const V3_8::StreamConfiguration& streams,
     ICameraDevice::isStreamCombinationSupported_cb _hidl_cb) {
   bool is_supported = false;
   google_camera_hal::StreamConfiguration stream_config;
@@ -246,7 +276,7 @@ Return<void> HidlCameraDevice::isStreamCombinationSupported_3_7(
 }
 
 }  // namespace implementation
-}  // namespace V3_7
+}  // namespace V3_8
 }  // namespace device
 }  // namespace camera
 }  // namespace hardware

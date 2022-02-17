@@ -16,6 +16,7 @@
 
 //#define LOG_NDEBUG 0
 //#define LOG_NNDEBUG 0
+#include "system/graphics-base-v1.1.h"
 #define LOG_TAG "EmulatedSensor"
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 
@@ -25,8 +26,7 @@
 #define ALOGVV(...) ((void)0)
 #endif
 
-#include "EmulatedSensor.h"
-
+#include <android/hardware/graphics/common/1.2/types.h>
 #include <cutils/properties.h>
 #include <inttypes.h>
 #include <libyuv.h>
@@ -37,6 +37,7 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "EmulatedSensor.h"
 #include "utils/ExifUtils.h"
 #include "utils/HWLUtils.h"
 
@@ -45,6 +46,8 @@ namespace android {
 using google_camera_hal::HalCameraMetadata;
 using google_camera_hal::MessageType;
 using google_camera_hal::NotifyMessage;
+
+using android::hardware::graphics::common::V1_2::Dataspace;
 
 const uint32_t EmulatedSensor::kRegularSceneHandshake = 1; // Scene handshake divider
 const uint32_t EmulatedSensor::kReducedSceneHandshake = 2; // Scene handshake divider
@@ -159,6 +162,17 @@ bool EmulatedSensor::AreCharacteristicsSupported(
     ALOGE("%s: Invalid sensor full res size %zux%zu", __FUNCTION__,
           characteristics.full_res_width, characteristics.full_res_height);
     return false;
+  }
+
+  if (characteristics.is_10bit_dynamic_range_capable) {
+    // We support only HLG10 at the moment
+    const auto& hlg10_entry = characteristics.dynamic_range_profiles.find(
+        ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10);
+    if ((characteristics.dynamic_range_profiles.size() != 1) ||
+        (hlg10_entry == characteristics.dynamic_range_profiles.end())) {
+      ALOGE("%s: Only support for HLG10 is available!", __FUNCTION__);
+      return false;
+    }
   }
 
   if ((characteristics.exposure_time_range[0] >=
@@ -357,6 +371,45 @@ bool EmulatedSensor::IsStreamCombinationSupported(
             dynamic_physical_output_formats.end()) {
           ALOGE("%s: Unsupported physical stream format %d", __FUNCTION__,
                 stream.format);
+          return false;
+        }
+      }
+
+      if (stream.dynamic_profile !=
+          ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) {
+        const SensorCharacteristics& sensor_char =
+            stream.is_physical_camera_stream
+                ? sensor_chars.at(stream.physical_camera_id)
+                : sensor_chars.at(logical_id);
+        if (!sensor_char.is_10bit_dynamic_range_capable) {
+          ALOGE("%s: 10-bit dynamic range output not supported on this device!",
+                __FUNCTION__);
+          return false;
+        }
+
+        if ((stream.format != HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) &&
+            (static_cast<android_pixel_format_v1_1_t>(stream.format) !=
+             HAL_PIXEL_FORMAT_YCBCR_P010)) {
+          ALOGE(
+              "%s: 10-bit dynamic range profile 0x%x not supported on a non "
+              "10-bit output stream"
+              " pixel format 0x%x",
+              __FUNCTION__, stream.dynamic_profile, stream.format);
+          return false;
+        }
+
+        if ((static_cast<android_pixel_format_v1_1_t>(stream.format) ==
+             HAL_PIXEL_FORMAT_YCBCR_P010) &&
+            ((stream.data_space !=
+              static_cast<android_dataspace_t>(Dataspace::BT2020_ITU_HLG)) &&
+             (stream.data_space !=
+              static_cast<android_dataspace_t>(Dataspace::BT2020_HLG)) &&
+             (stream.data_space !=
+              static_cast<android_dataspace_t>(Dataspace::UNKNOWN)))) {
+          ALOGE(
+              "%s: Unsupported stream data space 0x%x for 10-bit YUV "
+              "output",
+              __FUNCTION__, stream.data_space);
           return false;
         }
       }
@@ -628,9 +681,11 @@ bool EmulatedSensor::threadLoop() {
   }
 
   auto frame_duration = EmulatedSensor::kSupportedFrameDurationRange[0];
+  auto exposure_time = EmulatedSensor::kSupportedExposureTimeRange[0];
   // Frame duration must always be the same among all physical devices
   if ((settings.get() != nullptr) && (!settings->empty())) {
     frame_duration = settings->begin()->second.frame_duration;
+    exposure_time = settings->begin()->second.exposure_time;
   }
 
   nsecs_t start_real_time = systemTime();
@@ -642,6 +697,7 @@ bool EmulatedSensor::threadLoop() {
    * Stage 2: Capture new image
    */
   next_capture_time_ = frame_end_real_time;
+  next_readout_time_ = frame_end_real_time + exposure_time;
 
   sensor_binning_factor_info_.clear();
 
@@ -660,6 +716,14 @@ bool EmulatedSensor::threadLoop() {
         ALOGW("%s: Reprocess timestamp absent!", __FUNCTION__);
       }
 
+      ret = next_result->result_metadata->Get(ANDROID_SENSOR_EXPOSURE_TIME,
+                                              &entry);
+      if ((ret == OK) && (entry.count == 1)) {
+        next_readout_time_ = next_capture_time_ + entry.data.i64[0];
+      } else {
+        next_readout_time_ = next_capture_time_;
+      }
+
       reprocess_request = true;
   }
 
@@ -670,7 +734,9 @@ bool EmulatedSensor::threadLoop() {
           .type = MessageType::kShutter,
           .message.shutter = {
               .frame_number = next_buffers->at(0)->frame_number,
-              .timestamp_ns = static_cast<uint64_t>(next_capture_time_)}};
+              .timestamp_ns = static_cast<uint64_t>(next_capture_time_),
+              .readout_timestamp_ns =
+                  static_cast<uint64_t>(next_readout_time_)}};
       callback.notify(next_result->pipeline_id, msg);
     }
     auto b = next_buffers->begin();
@@ -720,8 +786,12 @@ bool EmulatedSensor::threadLoop() {
       scene_->SetTestPatternData(device_settings->second.test_pattern_data);
 
       uint32_t handshake_divider =
-        (device_settings->second.video_stab == ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_ON) ?
-        kReducedSceneHandshake : kRegularSceneHandshake;
+          (device_settings->second.video_stab ==
+           ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_ON) ||
+                  (device_settings->second.video_stab ==
+                   ANDROID_CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION)
+              ? kReducedSceneHandshake
+              : kRegularSceneHandshake;
       scene_->CalculateScene(next_capture_time_, handshake_divider);
 
       (*b)->stream_buffer.status = BufferStatus::kOk;

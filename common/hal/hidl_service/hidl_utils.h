@@ -19,10 +19,14 @@
 
 #include <android/hardware/camera/common/1.0/types.h>
 #include <android/hardware/camera/device/3.7/ICameraDeviceSession.h>
+#include <android/hardware/camera/device/3.8/ICameraDeviceSession.h>
+#include <android/hardware/camera/device/3.8/types.h>
 #include <fmq/MessageQueue.h>
 #include <hal_types.h>
 #include <hidl/HidlSupport.h>
+
 #include <memory>
+
 #include "hidl_camera_provider.h"
 
 namespace android {
@@ -42,7 +46,6 @@ using ::android::hardware::camera::common::V1_0::VendorTagSection;
 using ::android::hardware::camera::device::V3_2::BufferCache;
 using ::android::hardware::camera::device::V3_2::BufferStatus;
 using ::android::hardware::camera::device::V3_2::CameraMetadata;
-using ::android::hardware::camera::device::V3_2::NotifyMsg;
 using ::android::hardware::camera::device::V3_2::RequestTemplate;
 using ::android::hardware::camera::device::V3_2::StreamBuffer;
 using ::android::hardware::camera::device::V3_2::StreamConfigurationMode;
@@ -57,7 +60,8 @@ using ::android::hardware::camera::device::V3_5::StreamBufferRet;
 using ::android::hardware::camera::device::V3_5::StreamBuffersVal;
 using ::android::hardware::camera::device::V3_6::HalStreamConfiguration;
 using ::android::hardware::camera::device::V3_7::CaptureRequest;
-using ::android::hardware::camera::device::V3_7::StreamConfiguration;
+using ::android::hardware::camera::device::V3_8::NotifyMsg;
+using ::android::hardware::camera::device::V3_8::StreamConfiguration;
 using ::android::hardware::camera::provider::V2_5::DeviceState;
 
 // Util functions to convert the types between HIDL and Google Camera HAL.
@@ -156,6 +160,10 @@ status_t ConverToHalStreamConfig(
     google_camera_hal::StreamConfiguration* hal_stream_config);
 
 status_t ConverToHalStreamConfig(
+    const device::V3_7::StreamConfiguration& hidl_stream_config,
+    google_camera_hal::StreamConfiguration* hal_stream_config);
+
+status_t ConverToHalStreamConfig(
     const device::V3_4::StreamConfiguration& hidl_stream_config,
     google_camera_hal::StreamConfiguration* hal_stream_config);
 
@@ -189,7 +197,11 @@ status_t ConvertToHalBufferReturnStatus(
 
 status_t ConvertStreamConfigurationV34ToV37(
     const device::V3_4::StreamConfiguration& config_3_4,
-    StreamConfiguration* config_3_7);
+    device::V3_7::StreamConfiguration* config_3_7);
+
+status_t ConvertStreamConfigurationV37ToV38(
+    const device::V3_7::StreamConfiguration& config_3_7,
+    device::V3_8::StreamConfiguration* config_3_8);
 
 status_t ConvertToHalDeviceState(
     const hardware::hidl_bitfield<DeviceState> hidl_device_state,
