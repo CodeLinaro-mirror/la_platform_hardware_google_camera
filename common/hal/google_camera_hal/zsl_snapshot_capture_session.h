@@ -25,7 +25,7 @@
 #include "hwl_types.h"
 #include "process_block.h"
 #include "realtime_zsl_request_processor.h"
-#include "realtime_zsl_result_processor.h"
+#include "realtime_zsl_result_request_processor.h"
 #include "request_processor.h"
 #include "result_processor.h"
 #include "snapshot_request_processor.h"
@@ -42,7 +42,7 @@ class CameraDeviceSession;
 //
 //  1.SnapshotRequestProcessor->SnapshotProcessBlock->SnapshotResultProcessor
 //
-//  2.RealtimeZslRequestProcessor->CaptureSessionWrapperProcessBlock->RealtimeZslResultProcessor
+//  2.RealtimeZslRequestProcessor->CaptureSessionWrapperProcessBlock->RealtimeZslResultRequestProcessor->DenoiseProcessBlock->BasicResultProcessor
 //                                    ||  /\
 //                                    \/  ||
 //                             embedded capture session
@@ -128,6 +128,7 @@ class ZslSnapshotCaptureSession : public CaptureSession {
       std::vector<HalStream>* hal_configured_streams);
 
   std::unique_ptr<ProcessBlock> CreateSnapshotProcessBlock();
+  std::unique_ptr<ProcessBlock> CreateDenoiseProcessBlock();
 
   // Invoked when receiving a result from result processor.
   void ProcessCaptureResult(std::unique_ptr<CaptureResult> result);
@@ -141,9 +142,10 @@ class ZslSnapshotCaptureSession : public CaptureSession {
   // CaptureSessionWrapperProcessBlock will be owned and released by
   // RealtimeZslRequestProcessor.
   CaptureSessionWrapperProcessBlock* realtime_process_block_ = nullptr;
-  // RealtimeZslResultProcessor will be owned and released by
+  // RealtimeZslResultRequestProcessor will be owned and released by
   // CaptureSessionWrapperProcessBlock.
-  RealtimeZslResultProcessor* realtime_result_processor_ = nullptr;
+  RealtimeZslResultRequestProcessor* realtime_result_request_processor_ =
+      nullptr;
 
   std::unique_ptr<SnapshotRequestProcessor> snapshot_request_processor_;
   // SnapshotProcessBlock will be owned and released by
@@ -180,6 +182,10 @@ class ZslSnapshotCaptureSession : public CaptureSession {
   GetProcessBlockFactoryFunc snapshot_process_block_factory_;
   // Opened library handles that should be closed on destruction
   void* snapshot_process_block_lib_handle_ = nullptr;
+
+  GetProcessBlockFactoryFunc denoise_process_block_factory_;
+  // Opened library handles that should be closed on destruction
+  void* denoise_process_block_lib_handle_ = nullptr;
 
   // Partial result count reported by HAL
   uint32_t partial_result_count_ = 1;

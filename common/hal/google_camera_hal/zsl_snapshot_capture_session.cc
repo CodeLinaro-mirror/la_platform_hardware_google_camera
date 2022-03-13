@@ -140,6 +140,57 @@ ZslSnapshotCaptureSession::CreateSnapshotProcessBlock() {
 #endif
 }
 
+std::unique_ptr<ProcessBlock>
+ZslSnapshotCaptureSession::CreateDenoiseProcessBlock() {
+  ATRACE_CALL();
+#if GCH_HWL_USE_DLOPEN
+  bool found_process_block = false;
+  for (const auto& lib_path :
+       utils::FindLibraryPaths(kExternalProcessBlockDir)) {
+    ALOGI("%s: Loading %s", __FUNCTION__, lib_path.c_str());
+    void* lib_handle = nullptr;
+    lib_handle = dlopen(lib_path.c_str(), RTLD_NOW);
+    if (lib_handle == nullptr) {
+      ALOGW("Failed loading %s.", lib_path.c_str());
+      continue;
+    }
+
+    GetProcessBlockFactoryFunc external_process_block_t =
+        reinterpret_cast<GetProcessBlockFactoryFunc>(
+            dlsym(lib_handle, "GetProcessBlockFactory"));
+    if (external_process_block_t == nullptr) {
+      ALOGE("%s: dlsym failed (%s) when loading %s.", __FUNCTION__,
+            "GetProcessBlockFactoryFunc", lib_path.c_str());
+      dlclose(lib_handle);
+      lib_handle = nullptr;
+      continue;
+    }
+
+    if (external_process_block_t()->GetBlockName() == "DenoiseProcessBlock") {
+      denoise_process_block_factory_ = external_process_block_t;
+      denoise_process_block_lib_handle_ = lib_handle;
+      found_process_block = true;
+      break;
+    }
+  }
+  if (!found_process_block) {
+    ALOGE("%s: denoise process block does not exist", __FUNCTION__);
+    return nullptr;
+  }
+
+  return denoise_process_block_factory_()->CreateProcessBlock(
+      camera_device_session_hwl_);
+#else
+  if (GetDenoiseProcessBlockFactory == nullptr) {
+    ALOGE("%s: denoise process block does not exist", __FUNCTION__);
+    return nullptr;
+  }
+  denoise_process_block_factory_ = GetDenoiseProcessBlockFactory;
+  return GetDenoiseProcessBlockFactory()->CreateProcessBlock(
+      camera_device_session_hwl_);
+#endif
+}
+
 bool ZslSnapshotCaptureSession::IsStreamConfigurationSupported(
     CameraDeviceSessionHwl* device_session_hwl,
     const StreamConfiguration& stream_config) {
@@ -242,6 +293,7 @@ ZslSnapshotCaptureSession::~ZslSnapshotCaptureSession() {
   // SnapshotRequestProcessor before the lib handle is released.
   release_thread.join();
   dlclose(snapshot_process_block_lib_handle_);
+  dlclose(denoise_process_block_lib_handle_);
 }
 
 status_t ZslSnapshotCaptureSession::BuildPipelines(
@@ -353,17 +405,20 @@ status_t ZslSnapshotCaptureSession::ConfigureStreams(
   }
 
   // Create preview result processor. Stream ID is not set at this stage.
-  auto realtime_result_processor = RealtimeZslResultProcessor::Create(
-      internal_stream_manager_.get(), additional_stream_id,
-      HAL_PIXEL_FORMAT_YCBCR_420_888, partial_result_count_);
-  if (realtime_result_processor == nullptr) {
+  auto realtime_result_request_processor =
+      RealtimeZslResultRequestProcessor::Create(
+          internal_stream_manager_.get(), additional_stream_id,
+          HAL_PIXEL_FORMAT_YCBCR_420_888, partial_result_count_);
+  if (realtime_result_request_processor == nullptr) {
     ALOGE("%s: Creating RealtimeZslResultProcessor failed.", __FUNCTION__);
     return UNKNOWN_ERROR;
   }
-  realtime_result_processor_ = realtime_result_processor.get();
-  realtime_result_processor->SetResultCallback(process_capture_result, notify);
+  realtime_result_request_processor_ = realtime_result_request_processor.get();
+  realtime_result_request_processor->SetResultCallback(process_capture_result,
+                                                       notify);
 
-  res = process_block->SetResultProcessor(std::move(realtime_result_processor));
+  res = process_block->SetResultProcessor(
+      std::move(realtime_result_request_processor));
   if (res != OK) {
     ALOGE("%s: Setting result process in process block failed.", __FUNCTION__);
     return res;
@@ -487,14 +542,14 @@ status_t ZslSnapshotCaptureSession::SetupRealtimeProcessChain(
     ProcessCaptureResultFunc process_capture_result, NotifyFunc notify) {
   ATRACE_CALL();
   if (realtime_process_block_ != nullptr ||
-      realtime_result_processor_ != nullptr ||
+      realtime_result_request_processor_ != nullptr ||
       realtime_request_processor_ != nullptr) {
     ALOGE(
         "%s: realtime_process_block_(%p) or realtime_result_processor_(%p) or "
         "realtime_request_processor_(%p) is/are "
         "already set",
-        __FUNCTION__, realtime_process_block_, realtime_result_processor_,
-        realtime_request_processor_.get());
+        __FUNCTION__, realtime_process_block_,
+        realtime_result_request_processor_, realtime_request_processor_.get());
     return BAD_VALUE;
   }
 
