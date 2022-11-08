@@ -15,11 +15,12 @@
  */
 
 #define LOG_TAG "GCH_AidlUtils"
-//#define LOG_NDEBUG 0
+// #define LOG_NDEBUG 0
 #include "aidl_utils.h"
 
 #include <aidlcommonsupport/NativeHandle.h>
 #include <log/log.h>
+#include <system/camera_metadata.h>
 
 #include <regex>
 
@@ -35,6 +36,8 @@ namespace aidl_utils {
 using AidlCameraProvider = provider::implementation::AidlCameraProvider;
 using AidlCameraDevice = device::implementation::AidlCameraDevice;
 using AidlStatus = aidl::android::hardware::camera::common::Status;
+using DynamicRangeProfile = google_camera_hal::DynamicRangeProfile;
+using ColorSpaceProfile = google_camera_hal::ColorSpaceProfile;
 
 ScopedAStatus ConvertToAidlReturn(status_t hal_status) {
   switch (hal_status) {
@@ -742,6 +745,16 @@ status_t ConvertToHalMetadata(
     return OK;
   }
 
+  // Validates the injected metadata structure. This prevents memory access
+  // violation that could be introduced by malformed metadata.
+  // (b/236688120) In general we trust metadata sent from Framework, but this is
+  // to defend an exploit chain that skips Framework's validation.
+  if (validate_camera_metadata_structure(metadata, /*expected_size=*/NULL) !=
+      OK) {
+    ALOGE("%s: Failed to validate the metadata structure", __FUNCTION__);
+    return BAD_VALUE;
+  }
+
   *hal_metadata = google_camera_hal::HalCameraMetadata::Clone(metadata);
   return OK;
 }
@@ -1014,9 +1027,10 @@ status_t ConvertToHalStream(const Stream& aidl_stream,
           ? sensorPixelModeContains(aidl_stream,
                                     ANDROID_SENSOR_PIXEL_MODE_DEFAULT)
           : true;
-  hal_stream->dynamic_profile = static_cast<
-      camera_metadata_enum_android_request_available_dynamic_range_profiles_map>(
-      aidl_stream.dynamicRangeProfile);
+  hal_stream->dynamic_profile =
+      static_cast<DynamicRangeProfile>(aidl_stream.dynamicRangeProfile);
+  hal_stream->color_space =
+      static_cast<ColorSpaceProfile>(aidl_stream.colorSpace);
 
   hal_stream->use_case =
       static_cast<camera_metadata_enum_android_scaler_available_stream_use_cases>(
