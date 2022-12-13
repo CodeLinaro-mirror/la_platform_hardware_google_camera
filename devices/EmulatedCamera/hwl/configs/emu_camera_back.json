@@ -71,6 +71,10 @@
  "android.control.availableSceneModes": [
   "1"
  ],
+ "android.control.availableSettingsOverrides": [
+  "0",
+  "1"
+ ],
  "android.control.availableVideoStabilizationModes": [
    "0",
    "1",
@@ -86,6 +90,9 @@
  ],
  "android.control.awbLockAvailable": [
   "TRUE"
+ ],
+ "android.control.autoframingAvailable": [
+  "FALSE"
  ],
  "android.control.maxRegions": [
   "1",
@@ -297,6 +304,7 @@
   "1179650",
   "1179655",
   "1507329",
+  "65589",
   "65574",
   "65561",
   "65560",
@@ -327,6 +335,7 @@
   "65579",
   "65580",
   "65582",
+  "65592",
   "983050",
   "393217",
   "1572865",
@@ -394,6 +403,7 @@
   "65544",
   "65545",
   "65553",
+  "65588",
   "1441792",
   "1114128",
   "3",
@@ -460,6 +470,8 @@
   "65544",
   "65545",
   "65553",
+  "65588",
+  "65590",
   "1441792",
   "1114128",
   "3",
