@@ -15,7 +15,7 @@
  */
 package android.companion.virtualcamera;
 
-import android.hardware.graphics.common.PixelFormat;
+import android.companion.virtualcamera.Format;
 
 /**
  * Configuration supported by virtual camera owner.
@@ -25,5 +25,5 @@ import android.hardware.graphics.common.PixelFormat;
 parcelable SupportedStreamConfiguration {
     int width;
     int height;
-    PixelFormat pixelFormat = PixelFormat.UNSPECIFIED;
+    Format pixelFormat = Format.UNKNOWN;
 }
