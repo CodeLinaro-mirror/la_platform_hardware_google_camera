@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#ifndef ANDROID_COMPANION_VIRTUALCAMERA_EGLUTIL_H
+#define ANDROID_COMPANION_VIRTUALCAMERA_EGLUTIL_H
+
 namespace android {
 namespace companion {
 namespace virtualcamera {
@@ -21,6 +24,11 @@ namespace virtualcamera {
 // Returns true if the EGL is in an error state and logs the error.
 bool checkEglError(const char* operation = "EGL operation");
 
+// Returns true if the GL extension is supported, false otherwise.
+bool isGlExtensionSupported(const char* extension);
+
 }  // namespace virtualcamera
 }  // namespace companion
 }  // namespace android
+
+#endif  // ANDROID_COMPANION_VIRTUALCAMERA_EGLUTIL_H
