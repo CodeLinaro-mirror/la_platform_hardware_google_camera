@@ -6,15 +6,14 @@ package {
 cc_defaults {
     name: "libvirtualcamera_defaults",
     shared_libs: [
-        "android.hardware.camera.provider-V2-ndk",
-        "android.hardware.camera.common-V1-ndk",
-        "android.hardware.camera.device-V2-ndk",
-        "android.hardware.camera.metadata-V2-ndk",
+        "android.hardware.common-V2-ndk",
+        "android.hardware.common.fmq-V1-ndk",
         "libbinder_ndk",
         "libcamera_metadata",
         "liblog",
         "libfmq",
         "libandroid",
+        "libgui",
         "libnativewindow",
         "libbase",
         "libcutils",
@@ -26,6 +25,10 @@ cc_defaults {
     ],
     static_libs: [
         "android.hardware.camera.common@1.0-helper",
+        "android.hardware.camera.common-V1-ndk",
+        "android.hardware.camera.device-V2-ndk",
+        "android.hardware.camera.metadata-V2-ndk",
+        "android.hardware.camera.provider-V2-ndk",
         "libaidlcommonsupport",
     ],
     cflags: [
@@ -45,6 +48,7 @@ cc_library_static {
         "util/EglDisplayContext.cc",
         "util/EglFramebuffer.cc",
         "util/EglProgram.cc",
+        "util/EglSurfaceTexture.cc",
         "util/EglUtil.cc",
     ],
     defaults: [
