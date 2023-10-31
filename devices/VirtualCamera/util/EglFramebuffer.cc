@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "EglFramebuffer.h"
-
+// #define LOG_NDEBUG 0
 #define LOG_TAG "EglFramebuffer"
+#include "EglFramebuffer.h"
 
 #include "EGL/eglext.h"
 #include "EglUtil.h"
@@ -91,6 +91,8 @@ bool EglFrameBuffer::beforeDraw() {
   if (checkEglError("glBindFramebuffer")) {
     return false;
   }
+
+  glViewport(0, 0, mWidth, mHeight);
 
   return true;
 }
