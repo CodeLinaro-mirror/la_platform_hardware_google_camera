@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "VirtualCameraStream.h"
+#include "aidl/android/companion/virtualcamera/IVirtualCameraCallback.h"
 #include "aidl/android/hardware/camera/common/Status.h"
 #include "aidl/android/hardware/camera/device/BnCameraDeviceSession.h"
 #include "aidl/android/hardware/camera/device/BufferRequest.h"
@@ -38,7 +39,7 @@ namespace android {
 
 template <typename T, typename U>
 struct AidlMessageQueue;
-namespace services {
+namespace companion {
 namespace virtualcamera {
 
 // Implementation of ICameraDeviceSession AIDL interface to allow camera
@@ -47,11 +48,17 @@ namespace virtualcamera {
 class VirtualCameraSession
     : public ::aidl::android::hardware::camera::device::BnCameraDeviceSession {
  public:
+  // Construct new virtual camera session.
+  // When virtualCameraClientCallback is null, the input surface will be filled
+  // with test pattern.
   VirtualCameraSession(
+      const std::string& cameraId,
       std::shared_ptr<
           ::aidl::android::hardware::camera::device::ICameraDeviceCallback>
           cameraDeviceCallback,
-      const std::string& cameraId);
+      std::shared_ptr<
+          ::aidl::android::companion::virtualcamera::IVirtualCameraCallback>
+          virtualCameraClientCallback = nullptr);
 
   virtual ~VirtualCameraSession() override = default;
 
@@ -111,28 +118,42 @@ class VirtualCameraSession
  private:
   void removeBufferCaches(
       const std::vector<::aidl::android::hardware::camera::device::BufferCache>&
-          cachesToRemove);
+          cachesToRemove) EXCLUDES(mLock);
+
+  std::optional<::aidl::android::hardware::camera::device::Stream>
+  getStreamConfig(const ::aidl::android::hardware::camera::device::StreamBuffer&
+                      streamBuffer) const EXCLUDES(mLock);
 
   std::shared_ptr<AHardwareBuffer> fetchHardwareBuffer(
-      const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer);
+      const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer)
+      EXCLUDES(mLock);
 
   std::shared_ptr<EglFrameBuffer> fetchEglFramebuffer(
       const EGLDisplay eglDisplay,
-      const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer);
+      const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer)
+      EXCLUDES(mLock);
 
   ndk::ScopedAStatus processCaptureRequest(
       const ::aidl::android::hardware::camera::device::CaptureRequest& request);
 
-  ndk::ScopedAStatus renderIntoStreamBuffer(
+  ndk::ScopedAStatus renderIntoBlobStreamBuffer(
+      const ::aidl::android::hardware::camera::device::CaptureRequest& request,
+      const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer);
+
+  ndk::ScopedAStatus renderIntoImageStreamBuffer(
       const ::aidl::android::hardware::camera::device::CaptureRequest& request,
       const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer);
 
   const std::string mCameraId;
 
-  std::mutex mLock;
+  mutable std::mutex mLock;
 
   std::shared_ptr<::aidl::android::hardware::camera::device::ICameraDeviceCallback>
       mCameraDeviceCallback GUARDED_BY(mLock);
+
+  const std::shared_ptr<
+      ::aidl::android::companion::virtualcamera::IVirtualCameraCallback>
+      mVirtualCameraClientCallback;
 
   // Mapping stream id -> VirtualCameraStream.
   std::map<int, VirtualCameraStream> mStreams GUARDED_BY(mLock);
@@ -155,7 +176,7 @@ class VirtualCameraSession
 };
 
 }  // namespace virtualcamera
-}  // namespace services
+}  // namespace companion
 }  // namespace android
 
 #endif  // ANDROID_SERVICES_VIRTUAL_CAMERA_VIRTUALCAMERASESSION_H

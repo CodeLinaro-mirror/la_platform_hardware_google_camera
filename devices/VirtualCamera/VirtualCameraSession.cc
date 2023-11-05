@@ -15,18 +15,20 @@
  */
 
 // #define LOG_NDEBUG 0
-#include "android/native_window.h"
 #define LOG_TAG "VirtualCameraSession"
 #include "VirtualCameraSession.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <tuple>
 #include <utility>
 
@@ -35,6 +37,7 @@
 #include "VirtualCameraStream.h"
 #include "aidl/android/hardware/camera/common/Status.h"
 #include "aidl/android/hardware/camera/device/BufferCache.h"
+#include "aidl/android/hardware/camera/device/BufferStatus.h"
 #include "aidl/android/hardware/camera/device/CaptureRequest.h"
 #include "aidl/android/hardware/camera/device/HalStream.h"
 #include "aidl/android/hardware/camera/device/NotifyMsg.h"
@@ -42,7 +45,10 @@
 #include "aidl/android/hardware/camera/device/StreamConfiguration.h"
 #include "aidl/android/hardware/camera/device/StreamRotation.h"
 #include "aidl/android/hardware/graphics/common/BufferUsage.h"
+#include "aidl/android/hardware/graphics/common/PixelFormat.h"
 #include "android/hardware_buffer.h"
+#include "android/native_window.h"
+#include "android/native_window_aidl.h"
 #include "fmq/AidlMessageQueue.h"
 #include "log/log.h"
 #include "system/camera_metadata.h"
@@ -51,13 +57,15 @@
 #include "util/EglFramebuffer.h"
 #include "util/EglProgram.h"
 #include "util/MetadataBuilder.h"
+#include "util/MysteriousScaryBlob.h"
 #include "util/TestPatternHelper.h"
 #include "util/Util.h"
 
 namespace android {
-namespace services {
+namespace companion {
 namespace virtualcamera {
 
+using ::aidl::android::companion::virtualcamera::IVirtualCameraCallback;
 using ::aidl::android::hardware::camera::common::Status;
 using ::aidl::android::hardware::camera::device::BufferCache;
 using ::aidl::android::hardware::camera::device::BufferStatus;
@@ -72,6 +80,7 @@ using ::aidl::android::hardware::camera::device::ICameraOfflineSession;
 using ::aidl::android::hardware::camera::device::NotifyMsg;
 using ::aidl::android::hardware::camera::device::RequestTemplate;
 using ::aidl::android::hardware::camera::device::ShutterMsg;
+using ::aidl::android::hardware::camera::device::Stream;
 using ::aidl::android::hardware::camera::device::StreamBuffer;
 using ::aidl::android::hardware::camera::device::StreamConfiguration;
 using ::aidl::android::hardware::camera::device::StreamRotation;
@@ -159,12 +168,38 @@ NotifyMsg createErrorNotifyMsg(int frameNumber, int streamId, ErrorCode error) {
   return msg;
 }
 
+HalStream getHalStream(const Stream& stream) {
+  HalStream halStream;
+  halStream.id = stream.id;
+  halStream.physicalCameraId = stream.physicalCameraId;
+  halStream.maxBuffers = kMaxStreamBuffers;
+
+  if (stream.format == PixelFormat::IMPLEMENTATION_DEFINED) {
+    // If format is implementation defined we need it to override
+    // it with actual format.
+    // TODO(b/301023410) Override with the format based on the
+    // camera configuration, once we support more formats.
+    halStream.overrideFormat = PixelFormat::YCBCR_420_888;
+  } else {
+    halStream.overrideFormat = stream.format;
+  }
+  halStream.overrideDataSpace = stream.dataSpace;
+
+  halStream.producerUsage =
+      kUseEGL ? BufferUsage::GPU_RENDER_TARGET : BufferUsage::CPU_WRITE_OFTEN;
+  halStream.supportOffline = false;
+  return halStream;
+}
+
 }  // namespace
 
 VirtualCameraSession::VirtualCameraSession(
+    const std::string& cameraId,
     std::shared_ptr<ICameraDeviceCallback> cameraDeviceCallback,
-    const std::string& cameraId)
-    : mCameraId(cameraId), mCameraDeviceCallback(cameraDeviceCallback) {
+    std::shared_ptr<IVirtualCameraCallback> virtualCameraClientCallback)
+    : mCameraId(cameraId),
+      mCameraDeviceCallback(cameraDeviceCallback),
+      mVirtualCameraClientCallback(virtualCameraClientCallback) {
   mRequestMetadataQueue = std::make_unique<RequestMetadataQueue>(
       kMetadataMsgQueueSize, false /* non blocking */);
   if (!mRequestMetadataQueue->isValid()) {
@@ -181,6 +216,8 @@ VirtualCameraSession::VirtualCameraSession(
     mEglDisplayContext = std::make_unique<EglDisplayContext>();
     if (kRenderThroughSurfaceTexture) {
       mEglTextureProgram = std::make_unique<EglTextureProgram>();
+      // TODO(b/301023410) Initialize the texture based on supported formats and
+      // formats requested by client in configure call.
       mEglSurfaceTexture = std::make_unique<EglSurfaceTexture>(640, 480);
     } else {
       mEglTestPatternProgram = std::make_unique<EglTestPatternProgram>();
@@ -190,6 +227,11 @@ VirtualCameraSession::VirtualCameraSession(
 
 ndk::ScopedAStatus VirtualCameraSession::close() {
   ALOGV("%s", __func__);
+
+  if (mVirtualCameraClientCallback != nullptr) {
+    mVirtualCameraClientCallback->onStreamClosed(/*streamId=*/0);
+  }
+
   std::lock_guard<std::mutex> lock(mLock);
   mStreams.clear();
   return ndk::ScopedAStatus::ok();
@@ -210,31 +252,34 @@ ndk::ScopedAStatus VirtualCameraSession::configureStreams(
   halStreams.clear();
   halStreams.resize(in_requestedConfiguration.streams.size());
 
-  std::lock_guard<std::mutex> lock(mLock);
-
-  for (int i = 0; i < in_requestedConfiguration.streams.size(); ++i) {
-    // TODO(b/301023410) remove hardcoded format checks, verify against configuration.
-    if (streams[i].width != 640 || streams[i].height != 480 ||
-        streams[i].rotation != StreamRotation::ROTATION_0 ||
-        (streams[i].format != PixelFormat::IMPLEMENTATION_DEFINED &&
-         streams[i].format != PixelFormat::YCBCR_420_888 &&
-         streams[i].format != PixelFormat::BLOB)) {
-      mStreams.clear();
-      return cameraStatus(Status::ILLEGAL_ARGUMENT);
+  {
+    std::lock_guard<std::mutex> lock(mLock);
+    for (int i = 0; i < in_requestedConfiguration.streams.size(); ++i) {
+      // TODO(b/301023410) remove hardcoded format checks, verify against configuration.
+      if (streams[i].width != 640 || streams[i].height != 480 ||
+          streams[i].rotation != StreamRotation::ROTATION_0 ||
+          (streams[i].format != PixelFormat::IMPLEMENTATION_DEFINED &&
+           streams[i].format != PixelFormat::YCBCR_420_888 &&
+           streams[i].format != PixelFormat::BLOB)) {
+        mStreams.clear();
+        return cameraStatus(Status::ILLEGAL_ARGUMENT);
+      }
+      halStreams[i] = getHalStream(streams[i]);
+      mStreams.emplace(std::piecewise_construct,
+                       std::forward_as_tuple(streams[i].id),
+                       std::forward_as_tuple(streams[i]));
     }
-    memset(&halStreams[i], 0x00, sizeof(HalStream));
-    halStreams[i].id = streams[i].id;
-    halStreams[i].physicalCameraId = streams[i].physicalCameraId;
-    halStreams[i].overrideDataSpace = streams[i].dataSpace;
-    halStreams[i].maxBuffers = kMaxStreamBuffers;
-    halStreams[i].overrideFormat = PixelFormat::YCBCR_420_888;
-    halStreams[i].producerUsage =
-        kUseEGL ? BufferUsage::GPU_RENDER_TARGET : BufferUsage::CPU_WRITE_OFTEN;
-    halStreams[i].supportOffline = false;
+  }
 
-    mStreams.emplace(std::piecewise_construct,
-                     std::forward_as_tuple(streams[i].id),
-                     std::forward_as_tuple(streams[i]));
+  if (mVirtualCameraClientCallback != nullptr && kUseEGL) {
+    // TODO(b/301023410) Pass streamId based on client input stream id once
+    // support for multiple input streams is implemented. For now we always
+    // create single texture.
+    mVirtualCameraClientCallback->onStreamConfigured(
+        /*streamId=*/0,
+        aidl::android::view::Surface(mEglSurfaceTexture->getSurface().get()),
+        mEglSurfaceTexture->getWidth(), mEglSurfaceTexture->getHeight(),
+        PixelFormat::YCBCR_420_888);
   }
 
   mFirstRequest.store(true);
@@ -378,6 +423,18 @@ void VirtualCameraSession::removeBufferCaches(
   }
 }
 
+std::optional<Stream> VirtualCameraSession::getStreamConfig(
+    const StreamBuffer& streamBuffer) const {
+  std::lock_guard<std::mutex> lock(mLock);
+  auto it = mStreams.find(streamBuffer.streamId);
+  if (it == mStreams.end()) {
+    ALOGE("%s: StreamBuffer references buffer of unknown streamId %d", __func__,
+          streamBuffer.streamId);
+    return std::optional<Stream>();
+  }
+  return {it->second.getStreamConfig()};
+}
+
 std::shared_ptr<AHardwareBuffer> VirtualCameraSession::fetchHardwareBuffer(
     const StreamBuffer& streamBuffer) {
   std::lock_guard<std::mutex> lock(mLock);
@@ -439,25 +496,48 @@ ndk::ScopedAStatus VirtualCameraSession::processCaptureRequest(
   captureResult.result = createCaptureResultMetadata(timestamp);
 
   for (int i = 0; i < request.outputBuffers.size(); ++i) {
-    StreamBuffer& outBuffer = captureResult.outputBuffers[i];
-    outBuffer.streamId = request.outputBuffers[i].streamId;
-    outBuffer.bufferId = request.outputBuffers[i].bufferId;
-    if (renderIntoStreamBuffer(request, request.outputBuffers[i]).isOk()) {
-      cameraCallback->notify(
-          {createShutterNotifyMsg(request.frameNumber, timestamp)});
-      outBuffer.status = BufferStatus::OK;
-    } else {
-      cameraCallback->notify({createErrorNotifyMsg(
-          request.frameNumber, outBuffer.bufferId, ErrorCode::ERROR_BUFFER)});
-      outBuffer.status = BufferStatus::ERROR;
+    const StreamBuffer& reqBuffer = request.outputBuffers[i];
+    StreamBuffer& resBuffer = captureResult.outputBuffers[i];
+    resBuffer.streamId = reqBuffer.streamId;
+    resBuffer.bufferId = reqBuffer.bufferId;
+    resBuffer.status = BufferStatus::OK;
+
+    const std::optional<Stream> streamConfig = getStreamConfig(reqBuffer);
+
+    if (!streamConfig.has_value()) {
+      resBuffer.status = BufferStatus::ERROR;
+      continue;
     }
+
+    auto status = streamConfig->format == PixelFormat::BLOB
+                      ? renderIntoBlobStreamBuffer(request, reqBuffer)
+                      : renderIntoImageStreamBuffer(request, reqBuffer);
+    if (!status.isOk()) {
+      resBuffer.status = BufferStatus::ERROR;
+    }
+  }
+
+  std::vector<NotifyMsg> notifyMsg{
+      createShutterNotifyMsg(request.frameNumber, timestamp)};
+  for (const StreamBuffer& resBuffer : captureResult.outputBuffers) {
+    if (resBuffer.status != BufferStatus::OK) {
+      notifyMsg.push_back(createErrorNotifyMsg(
+          request.frameNumber, resBuffer.streamId, ErrorCode::ERROR_BUFFER));
+    }
+  }
+
+  auto status = cameraCallback->notify(notifyMsg);
+  if (!status.isOk()) {
+    ALOGE("%s: notify call failed: %s", __func__,
+          status.getDescription().c_str());
+    return cameraStatus(Status::INTERNAL_ERROR);
   }
 
   std::vector<::aidl::android::hardware::camera::device::CaptureResult>
       captureResults(1);
   captureResults[0] = std::move(captureResult);
 
-  auto status = cameraCallback->processCaptureResult(captureResults);
+  status = cameraCallback->processCaptureResult(captureResults);
   if (!status.isOk()) {
     ALOGE("%s: processCaptureResult call failed: %s", __func__,
           status.getDescription().c_str());
@@ -469,9 +549,38 @@ ndk::ScopedAStatus VirtualCameraSession::processCaptureRequest(
   return ndk::ScopedAStatus::ok();
 }
 
-ndk::ScopedAStatus VirtualCameraSession::renderIntoStreamBuffer(
+ndk::ScopedAStatus VirtualCameraSession::renderIntoBlobStreamBuffer(
     const ::aidl::android::hardware::camera::device::CaptureRequest& request,
     const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer) {
+  ALOGV("%s", __func__);
+  (void)request;
+  sp<Fence> fence = importFence(streamBuffer.acquireFence);
+
+  std::shared_ptr<AHardwareBuffer> hwBuffer = fetchHardwareBuffer(streamBuffer);
+
+  AHardwareBuffer_Planes planes_info;
+
+  int result = AHardwareBuffer_lockPlanes(hwBuffer.get(),
+                                          AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+                                          fence->get(), nullptr, &planes_info);
+  if (result != OK) {
+    ALOGE("%s: Failed to lock planes: %d", __func__, result);
+    ndk::ScopedAStatus::ok();
+  }
+
+  if (planes_info.planeCount >= 1) {
+    memcpy(planes_info.planes[0].data, mysteriousScaryBlob,
+           sizeof(mysteriousScaryBlob));
+  }
+
+  AHardwareBuffer_unlock(hwBuffer.get(), nullptr);
+  return ndk::ScopedAStatus::ok();
+}
+
+ndk::ScopedAStatus VirtualCameraSession::renderIntoImageStreamBuffer(
+    const ::aidl::android::hardware::camera::device::CaptureRequest& request,
+    const ::aidl::android::hardware::camera::device::StreamBuffer& streamBuffer) {
+  ALOGV("%s", __func__);
   sp<Fence> fence = importFence(streamBuffer.acquireFence);
   if (kUseEGL && mEglDisplayContext->isInitialized()) {
     // Wait for fence to clear.
@@ -496,7 +605,8 @@ ndk::ScopedAStatus VirtualCameraSession::renderIntoStreamBuffer(
       return cameraStatus(Status::ILLEGAL_ARGUMENT);
     }
 
-    if (kRenderThroughSurfaceTexture) {
+    if (kRenderThroughSurfaceTexture &&
+        mVirtualCameraClientCallback == nullptr) {
       // Since we don't have client API yet to pass Surface to, let's just
       // render something to the Surface ourselves.
       renderTestPatternYCbCr420(mEglSurfaceTexture->getSurface(),
@@ -530,5 +640,5 @@ ndk::ScopedAStatus VirtualCameraSession::renderIntoStreamBuffer(
 }
 
 }  // namespace virtualcamera
-}  // namespace services
+}  // namespace companion
 }  // namespace android
