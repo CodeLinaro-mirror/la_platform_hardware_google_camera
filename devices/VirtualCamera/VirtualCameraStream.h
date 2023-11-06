@@ -31,7 +31,7 @@
 #include "utils/Mutex.h"
 
 namespace android {
-namespace services {
+namespace companion {
 namespace virtualcamera {
 
 // Encapsulates buffer management for the set of buffers belonging to the single
@@ -59,6 +59,9 @@ class VirtualCameraStream {
   // Returns true if removal is successful, false otherwise.
   bool removeBuffer(int bufferId) EXCLUDES(mLock);
 
+  // Returns AIDL Stream instance containing configuration of this stream.
+  ::aidl::android::hardware::camera::device::Stream getStreamConfig() const;
+
  private:
   std::shared_ptr<AHardwareBuffer> getHardwareBufferLocked(
       const ::aidl::android::hardware::camera::device::StreamBuffer& buffer)
@@ -84,7 +87,7 @@ class VirtualCameraStream {
 };
 
 }  // namespace virtualcamera
-}  // namespace services
+}  // namespace companion
 }  // namespace android
 
 #endif  // ANDROID_SERVICES_VIRTUALCAMERA_VIRTUALCAMERASTREAM_H
