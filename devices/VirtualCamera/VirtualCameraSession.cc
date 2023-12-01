@@ -65,6 +65,7 @@ namespace android {
 namespace companion {
 namespace virtualcamera {
 
+using ::aidl::android::companion::virtualcamera::Format;
 using ::aidl::android::companion::virtualcamera::IVirtualCameraCallback;
 using ::aidl::android::hardware::camera::common::Status;
 using ::aidl::android::hardware::camera::device::BufferCache;
@@ -240,7 +241,7 @@ ndk::ScopedAStatus VirtualCameraSession::configureStreams(
     // create single texture.
     mVirtualCameraClientCallback->onStreamConfigured(
         /*streamId=*/0, aidl::android::view::Surface(inputSurface.get()),
-        inputWidth, inputHeight, PixelFormat::YCBCR_420_888);
+        inputWidth, inputHeight, Format::YUV_420_888);
   }
 
   mFirstRequest.store(true);
@@ -276,6 +277,8 @@ ndk::ScopedAStatus VirtualCameraSession::constructDefaultRequestSettings(
 
 ndk::ScopedAStatus VirtualCameraSession::flush() {
   ALOGV("%s", __func__);
+  std::lock_guard<std::mutex> lock(mLock);
+  mRenderThread->flush();
   return ndk::ScopedAStatus::ok();
 }
 
