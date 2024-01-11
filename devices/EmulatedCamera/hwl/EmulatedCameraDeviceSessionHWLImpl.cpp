@@ -384,19 +384,25 @@ status_t EmulatedCameraDeviceSessionHwlImpl::BuildPipelines() {
   return OK;
 }
 
-std::set<int32_t> EmulatedCameraDeviceSessionHwlImpl::GetHalBufferManagedStreams(
-    const StreamConfiguration& config) {
-  std::set<int32_t> ret;
-  for (const auto& stream : config.streams) {
-    if (stream.stream_type == google_camera_hal::StreamType::kInput) {
-      continue;
-    }
-    // Just a heuristic - odd numbered stream ids are hal buffer managed.
-    if ((stream.group_id != -1) || (stream.id % 2)) {
-      ret.insert(stream.id);
-    }
+status_t EmulatedCameraDeviceSessionHwlImpl::ShouldUseHalBufferManager(
+    bool* result) {
+  if (result == nullptr) {
+    ALOGE("%s result is nullptr", __FUNCTION__);
+    return BAD_VALUE;
   }
-  return ret;
+  *result = false;
+  if (!pipelines_built_) {
+    ALOGE("%s: Pipelines haven't been built yet", __FUNCTION__);
+    return INVALID_OPERATION;
+  }
+  if (!supports_session_hal_buf_manager_) {
+    return OK;
+  }
+  // Heuristic which doesn't necessarily correspond to real scenarios
+  if (pipelines_.size() >= 1 && pipelines_[0].streams.size() >= 2) {
+    *result = true;
+  }
+  return OK;
 }
 
 void EmulatedCameraDeviceSessionHwlImpl::DestroyPipelines() {
