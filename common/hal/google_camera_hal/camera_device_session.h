@@ -156,9 +156,7 @@ class CameraDeviceSession {
 
   // Update all buffer handles in buffers with the imported buffer handles.
   // Must be protected by imported_buffer_handle_map_lock_.
-  status_t UpdateBufferHandlesLocked(
-      std::vector<StreamBuffer>* buffers,
-      bool update_hal_buffer_managed_streams = false);
+  status_t UpdateBufferHandlesLocked(std::vector<StreamBuffer>* buffers);
 
   // Import the buffer handles in the request.
   status_t ImportRequestBufferHandles(const CaptureRequest& request);
@@ -257,8 +255,8 @@ class CameraDeviceSession {
   status_t TryHandleDummyResult(CaptureResult* result, bool* result_handled);
 
   // Check if all streams in the current session are active in SBC manager
-  status_t HandleSBCInactiveStreams(const CaptureRequest& request,
-                                    bool* all_active);
+  status_t HandleInactiveStreams(const CaptureRequest& request,
+                                 bool* all_active);
 
   // Check the capture request before sending it to HWL. Only needed when HAL
   // Buffer Management is supported. The SBC manager determines if it is
@@ -375,14 +373,6 @@ class CameraDeviceSession {
   // If session specific hal buffer manager is supported by the HAL
   bool session_buffer_management_supported_ = false;
 
-  // The set of hal buffer managed stream ids. This is set during capture
-  // session creation time and is constant thereafter. As per the AIDL interface
-  // contract, the framework also does not every call configureStreams while
-  // captures are ongoing - i.e. all buffers and output metadata is not returned
-  // to the framework. Consequently, this does not need to be protected  after
-  // stream configuration is completed.
-  std::set<int32_t> hal_buffer_managed_stream_ids_;
-
   // Pending requests tracker used when buffer management API is enabled.
   // Protected by session_lock_.
   std::unique_ptr<PendingRequestsTracker> pending_requests_tracker_;
@@ -402,7 +392,7 @@ class CameraDeviceSession {
   std::mutex request_record_lock_;
 
   // Map from frame number to a set of stream ids, which exist in
-  // request[frame number] - only used by hal buffer managed streams
+  // request[frame number]
   // Protected by request_record_lock_;
   std::map<uint32_t, std::set<int32_t>> pending_request_streams_;
 
