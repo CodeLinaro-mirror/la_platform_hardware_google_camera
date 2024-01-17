@@ -735,6 +735,20 @@ status_t EmulatedRequestState::InitializeSensorSettings(
     }
   }
 
+  // Check manual flash strength level
+  ret = request_settings_->Get(ANDROID_FLASH_STRENGTH_LEVEL, &entry);
+  if ((ret == OK) && (entry.count == 1)) {
+    flash_strength_level_ = entry.data.i32[0];
+    if (ANDROID_FLASH_SINGLE_STRENGTH_MAX_LEVEL > 1 &&
+            ANDROID_FLASH_TORCH_STRENGTH_MAX_LEVEL > 1 && is_flash_supported_) {
+      ALOGI("%s: Device supports manual flash strength control", __FUNCTION__);
+      flash_strength_level_ = entry.data.i32[0];
+    } else {
+        ALOGI("%s: Device does not support manual flash strength control", __FUNCTION__);
+        return BAD_VALUE;
+      }
+    }
+
   // Check video stabilization parameter
   uint8_t edge_mode = ANDROID_EDGE_MODE_OFF;
   ret = request_settings_->Get(ANDROID_EDGE_MODE, &entry);
@@ -995,14 +1009,20 @@ std::unique_ptr<HwlPipelineResult> EmulatedRequestState::InitializeResult(
   if (report_exposure_time_) {
     result->result_metadata->Set(ANDROID_SENSOR_EXPOSURE_TIME,
                                  &sensor_exposure_time_, 1);
+  } else {
+    result->result_metadata->Erase(ANDROID_SENSOR_EXPOSURE_TIME);
   }
   if (report_frame_duration_) {
     result->result_metadata->Set(ANDROID_SENSOR_FRAME_DURATION,
                                  &sensor_frame_duration_, 1);
+  } else {
+    result->result_metadata->Erase(ANDROID_SENSOR_FRAME_DURATION);
   }
   if (report_sensitivity_) {
     result->result_metadata->Set(ANDROID_SENSOR_SENSITIVITY,
                                  &sensor_sensitivity_, 1);
+  } else {
+    result->result_metadata->Erase(ANDROID_SENSOR_SENSITIVITY);
   }
   if (report_rolling_shutter_skew_) {
     result->result_metadata->Set(
@@ -1044,6 +1064,11 @@ std::unique_ptr<HwlPipelineResult> EmulatedRequestState::InitializeResult(
                                  intrinsic_calibration_,
                                  ARRAY_SIZE(intrinsic_calibration_));
   }
+  if (report_lens_intrinsics_samples_) {
+    result->result_metadata->Set(ANDROID_STATISTICS_LENS_INTRINSIC_SAMPLES,
+                                 intrinsic_calibration_,
+                                 ARRAY_SIZE(intrinsic_calibration_));
+  }
   if (report_distortion_) {
     result->result_metadata->Set(ANDROID_LENS_DISTORTION, distortion_,
                                  ARRAY_SIZE(distortion_));
@@ -1064,6 +1089,11 @@ std::unique_ptr<HwlPipelineResult> EmulatedRequestState::InitializeResult(
     }
     result->result_metadata->Set(ANDROID_SCALER_CROP_REGION, chosen_crop_region,
                                  ARRAY_SIZE(scaler_crop_region_default_));
+    if (report_active_sensor_crop_) {
+      result->result_metadata->Set(
+          ANDROID_LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_SENSOR_CROP_REGION,
+          chosen_crop_region, ARRAY_SIZE(scaler_crop_region_default_));
+    }
   }
   if (report_extended_scene_mode_) {
     result->result_metadata->Set(ANDROID_CONTROL_EXTENDED_SCENE_MODE,
@@ -1320,6 +1350,11 @@ status_t EmulatedRequestState::InitializeStatisticsDefaults() {
     return BAD_VALUE;
   }
 
+  report_lens_intrinsics_samples_ =
+      (available_results_.find(ANDROID_STATISTICS_LENS_INTRINSIC_SAMPLES) !=
+       available_results_.end()) &&
+      (available_results_.find(ANDROID_STATISTICS_LENS_INTRINSIC_TIMESTAMPS) !=
+       available_results_.end());
   report_scene_flicker_ =
       available_results_.find(ANDROID_STATISTICS_SCENE_FLICKER) !=
       available_results_.end();
@@ -2411,6 +2446,12 @@ status_t EmulatedRequestState::InitializeScalerDefaults() {
       ALOGE("%s: Scaler crop must reported on backward compatible devices!",
             __FUNCTION__);
       return BAD_VALUE;
+    }
+
+    if (available_requests_.find(
+            ANDROID_LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_SENSOR_CROP_REGION) !=
+        available_results_.end()) {
+      report_active_sensor_crop_ = true;
     }
     ret = static_metadata_->Get(ANDROID_SCALER_AVAILABLE_ROTATE_AND_CROP_MODES,
                                 &entry);
