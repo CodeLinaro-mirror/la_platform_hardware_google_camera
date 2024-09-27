@@ -19,6 +19,7 @@
 // #define LOG_NDEBUG 0
 #include "aidl_camera_device_session.h"
 
+#include <aidl/android/hardware/thermal/IThermal.h>
 #include <android/binder_ibinder_platform.h>
 #include <android/binder_manager.h>
 #include <cutils/properties.h>
