@@ -45,9 +45,10 @@
 namespace android {
 
 using android::google_camera_hal::ErrorCode;
+using google_camera_hal::ErrorMessage;
 using google_camera_hal::HalCameraMetadata;
-using google_camera_hal::MessageType;
 using google_camera_hal::NotifyMessage;
+using google_camera_hal::ShutterMessage;
 
 using android::hardware::graphics::common::V1_2::Dataspace;
 
@@ -223,13 +224,18 @@ bool EmulatedSensor::AreCharacteristicsSupported(
   }
 
   if (characteristics.is_10bit_dynamic_range_capable) {
-    // We support only HLG10 at the moment
-    const auto& hlg10_entry = characteristics.dynamic_range_profiles.find(
-        ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10);
-    if ((characteristics.dynamic_range_profiles.size() != 1) ||
-        (hlg10_entry == characteristics.dynamic_range_profiles.end())) {
-      ALOGE("%s: Only support for HLG10 is available!", __FUNCTION__);
-      return false;
+    for (const auto& profile : characteristics.dynamic_range_profiles) {
+      switch (profile.first) {
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10_AGTM:
+          break;
+        default:
+          ALOGE("%s: Only support for HLG10 and AGTM is available!",
+                __FUNCTION__);
+          return false;
+      }
     }
   }
 
@@ -433,8 +439,10 @@ bool EmulatedSensor::IsStreamCombinationSupported(
         }
       }
 
-      if (stream.dynamic_profile !=
-          ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) {
+      if ((stream.dynamic_profile !=
+           ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) &&
+          (stream.dynamic_profile !=
+           ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM)) {
         const SensorCharacteristics& sensor_char =
             stream.is_physical_camera_stream
                 ? sensor_chars.at(stream.physical_camera_id)
@@ -740,13 +748,11 @@ status_t EmulatedSensor::Flush() {
     if ((current_result_.get() != nullptr) &&
         (current_result_->result_metadata.get() != nullptr)) {
       if (current_output_buffers_->at(0)->callback.notify != nullptr) {
-        NotifyMessage msg{
-            .type = MessageType::kError,
-            .message.error = {
-                .frame_number = current_output_buffers_->at(0)->frame_number,
-                .error_stream_id = -1,
-                .error_code = ErrorCode::kErrorResult,
-            }};
+        NotifyMessage msg = ErrorMessage{
+            .frame_number = current_output_buffers_->at(0)->frame_number,
+            .error_stream_id = -1,
+            .error_code = ErrorCode::kErrorResult,
+        };
 
         current_output_buffers_->at(0)->callback.notify(
             current_result_->pipeline_id, msg);
@@ -852,13 +858,13 @@ bool EmulatedSensor::threadLoop() {
   if ((next_buffers != nullptr) && (settings != nullptr)) {
     callback = next_buffers->at(0)->callback;
     if (callback.notify != nullptr) {
-      NotifyMessage msg{
-          .type = MessageType::kShutter,
-          .message.shutter = {
-              .frame_number = next_buffers->at(0)->frame_number,
-              .timestamp_ns = static_cast<uint64_t>(next_capture_time_),
-              .readout_timestamp_ns =
-                  static_cast<uint64_t>(next_readout_time_)}};
+      std::vector<StreamGroupState> stream_group_state =
+          GetStreamGroupState(*next_buffers);
+      NotifyMessage msg = ShutterMessage{
+          .frame_number = next_buffers->at(0)->frame_number,
+          .timestamp_ns = static_cast<uint64_t>(next_capture_time_),
+          .readout_timestamp_ns = static_cast<uint64_t>(next_readout_time_),
+          .stream_group_state = stream_group_state};
       callback.notify(next_result->pipeline_id, msg);
     }
     auto b = next_buffers->begin();
@@ -2088,6 +2094,27 @@ void EmulatedSensor::CalculateRgbRgbMatrix(int32_t color_space,
   rgb_rgb_matrix_.bB = xyzMatrix->xB * chars.forward_matrix.bX +
                        xyzMatrix->yB * chars.forward_matrix.bY +
                        xyzMatrix->zB * chars.forward_matrix.bZ;
+}
+
+std::vector<StreamGroupState> EmulatedSensor::GetStreamGroupState(
+    const Buffers& outputBuffers) {
+  std::unordered_map<int32_t, std::vector<int32_t>> stream_group_state_map;
+  for (const auto& sensorBuffer : outputBuffers) {
+    if (sensorBuffer->group_id == -1) {
+      continue;
+    }
+    if (!sensorBuffer->group_concurrency_enabled) {
+      continue;
+    }
+    int32_t stream_id = sensorBuffer->stream_buffer.stream_id;
+    stream_group_state_map[sensorBuffer->group_id].push_back(stream_id);
+  }
+
+  std::vector<StreamGroupState> res;
+  for (auto& [group_id, value] : stream_group_state_map) {
+    res.push_back({group_id, std::move(value)});
+  }
+  return res;
 }
 
 }  // namespace android

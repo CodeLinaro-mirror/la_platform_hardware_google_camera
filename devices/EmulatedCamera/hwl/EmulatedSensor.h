@@ -96,6 +96,7 @@ using google_camera_hal::DynamicRangeProfile;
 using google_camera_hal::HwlPipelineCallback;
 using google_camera_hal::HwlPipelineResult;
 using google_camera_hal::StreamConfiguration;
+using google_camera_hal::StreamGroupState;
 
 using hardware::graphics::common::V1_2::Dataspace;
 
@@ -199,11 +200,13 @@ class EmulatedSensor : private Thread, public virtual RefBase {
       android_pixel_format_t format, DynamicRangeProfile dynamic_range_profile) {
     switch (dynamic_range_profile) {
       case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD:
+      case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM:
         if (format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
           return HAL_PIXEL_FORMAT_YCBCR_420_888;
         }
         break;
       case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10:
+      case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10_AGTM:
         if (format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED) {
           return static_cast<android_pixel_format_t>(
               HAL_PIXEL_FORMAT_YCBCR_P010);
@@ -465,6 +468,9 @@ class EmulatedSensor : private Thread, public virtual RefBase {
   static float GetBaseGainFactor(float max_raw_value) {
     return max_raw_value / EmulatedSensor::kSaturationElectrons;
   }
+
+  static std::vector<StreamGroupState> GetStreamGroupState(
+      const Buffers& output_buffers);
 
   nsecs_t getSystemTimeWithSource(uint32_t timestamp_source);
 };

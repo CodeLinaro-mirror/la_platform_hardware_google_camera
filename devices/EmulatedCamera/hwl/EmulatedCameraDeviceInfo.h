@@ -204,6 +204,8 @@ struct EmulatedCameraDeviceInfo {
   uint8_t af_trigger_ = ANDROID_CONTROL_AF_TRIGGER_IDLE;
   uint8_t ae_trigger_ = ANDROID_CONTROL_AE_PRECAPTURE_TRIGGER_IDLE;
   uint8_t autoframing_ = ANDROID_CONTROL_AUTOFRAMING_OFF;
+  uint8_t logcial_multi_camera_additional_results_ =
+      ANDROID_LOGICAL_MULTI_CAMERA_ADDITIONAL_RESULTS_OFF;
   FPSRange ae_target_fps_ = {0, 0};
   float zoom_ratio_ = 1.0f;
   uint8_t extended_scene_mode_ = ANDROID_CONTROL_EXTENDED_SCENE_MODE_DISABLED;
@@ -293,6 +295,7 @@ struct EmulatedCameraDeviceInfo {
   status_t InitializeControlefaults();
   status_t InitializeInfoDefaults();
   status_t InitializeLensDefaults();
+  status_t InitializeLogicalMultiCameraDefaults();
 
   bool SupportsCapability(uint8_t cap);
 };

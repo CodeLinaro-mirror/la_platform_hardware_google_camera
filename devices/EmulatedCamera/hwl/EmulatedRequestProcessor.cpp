@@ -38,8 +38,8 @@ using android::hardware::camera::common::V1_0::helper::HandleImporter;
 using ::android::hardware::sensors::V1_0::SensorInfo;
 using ::android::hardware::sensors::V1_0::SensorType;
 using google_camera_hal::ErrorCode;
+using google_camera_hal::ErrorMessage;
 using google_camera_hal::HwlPipelineResult;
-using google_camera_hal::MessageType;
 using google_camera_hal::NotifyMessage;
 
 EmulatedRequestProcessor::EmulatedRequestProcessor(
@@ -218,11 +218,9 @@ void EmulatedRequestProcessor::NotifyFailedRequest(const PendingRequest& request
     }
   }
 
-  NotifyMessage msg = {
-      .type = MessageType::kError,
-      .message.error = {.frame_number = request.frame_number,
-                        .error_stream_id = -1,
-                        .error_code = ErrorCode::kErrorRequest}};
+  NotifyMessage msg = ErrorMessage{.frame_number = request.frame_number,
+                                   .error_stream_id = -1,
+                                   .error_code = ErrorCode::kErrorRequest};
   request.callback.notify(request.pipeline_id, msg);
 }
 
@@ -326,6 +324,17 @@ status_t EmulatedRequestProcessor::LockSensorBuffer(
         return BAD_VALUE;
       }
       sensor_buffer->plane.img_y_crcb.bytesPerPixel = isP010 ? 2 : 1;
+      if (stream.dynamic_profile ==
+              ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM ||
+          stream.dynamic_profile ==
+              ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10_AGTM) {
+        std::vector<uint8_t> meta = {'T', 'E', 'S', 'T', '\0'};
+        auto stat = importer_->setSmpte2094_50(buffer, meta);
+        if (stat != OK) {
+          ALOGE("%s: Failed to set SMPTE50_40 metadata for stream id %d !",
+                __FUNCTION__, stream.id);
+        }
+      }
     } else {
       ALOGE("%s: Failed to lock output buffer for stream id %d !", __FUNCTION__,
             stream.id);
@@ -399,19 +408,21 @@ std::unique_ptr<SensorBuffer> EmulatedRequestProcessor::CreateSensorBuffer(
                                 buffer->width, buffer->height, buffer.get());
     if (ret != OK) {
       buffer->is_failed_request = true;
-      buffer = nullptr;
+      return nullptr;
     }
   }
 
-  if ((buffer.get() != nullptr) && (stream_buffer.acquire_fence != nullptr)) {
+  if (stream_buffer.acquire_fence != nullptr) {
     auto fence_status = importer_->importFence(stream_buffer.acquire_fence,
                                                buffer->acquire_fence_fd);
     if (!fence_status) {
       ALOGE("%s: Failed importing acquire fence!", __FUNCTION__);
       buffer->is_failed_request = true;
-      buffer = nullptr;
+      return nullptr;
     }
   }
+  buffer->group_id = stream.group_id;
+  buffer->group_concurrency_enabled = stream.group_concurrency_enabled;
 
   return buffer;
 }
@@ -515,24 +526,22 @@ void EmulatedRequestProcessor::RequestProcessorLoop() {
                 std::move(partial_result), std::move(input_buffers),
                 std::move(output_buffers));
           } else {
-            NotifyMessage msg{.type = MessageType::kError,
-                              .message.error = {
-                                  .frame_number = frame_number,
-                                  .error_stream_id = -1,
-                                  .error_code = ErrorCode::kErrorResult,
-                              }};
+            NotifyMessage msg = ErrorMessage{
+                .frame_number = frame_number,
+                .error_stream_id = -1,
+                .error_code = ErrorCode::kErrorResult,
+            };
 
             notify_callback.notify(pipeline_id, msg);
           }
         } else {
           // No further processing is needed, just fail the result which will
           // complete this request.
-          NotifyMessage msg{.type = MessageType::kError,
-                            .message.error = {
-                                .frame_number = frame_number,
-                                .error_stream_id = -1,
-                                .error_code = ErrorCode::kErrorResult,
-                            }};
+          NotifyMessage msg = ErrorMessage{
+              .frame_number = frame_number,
+              .error_stream_id = -1,
+              .error_code = ErrorCode::kErrorResult,
+          };
 
           notify_callback.notify(pipeline_id, msg);
         }

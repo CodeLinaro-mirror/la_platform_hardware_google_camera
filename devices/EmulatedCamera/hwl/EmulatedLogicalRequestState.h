@@ -34,6 +34,8 @@ struct EmulatedStream : public HalStream {
   int32_t group_id;
   int64_t use_case;
   int32_t color_space;
+  uint64_t dynamic_profile;
+  bool group_concurrency_enabled;
 };
 
 struct EmulatedPipeline {
@@ -110,6 +112,7 @@ class EmulatedLogicalRequestState {
   EmulatedLogicalRequestState(const EmulatedLogicalRequestState&) = delete;
   EmulatedLogicalRequestState& operator=(const EmulatedLogicalRequestState&) =
       delete;
+  bool is_logical_multi_camera_additional_results_ = false;
 };
 
 }  // namespace android

@@ -27,7 +27,6 @@
 #include <utils/Trace.h>
 
 #include "hal_utils.h"
-#include "libgooglecamerahal_flags.h"
 #include "realtime_zsl_result_request_processor.h"
 #include "snapshot_request_processor.h"
 #include "snapshot_result_processor.h"
@@ -736,12 +735,7 @@ status_t ZslSnapshotCaptureSession::Initialize(
   res = characteristics->Get(VendorTagIds::kVideoSwDenoiseEnabled,
                              &video_sw_denoise_entry);
   if (res == OK && video_sw_denoise_entry.data.u8[0] == 1) {
-    if (libgooglecamerahal::flags::zsl_video_denoise_in_hwl_two()) {
-      ALOGI("%s: video sw denoise is enabled in HWL", __FUNCTION__);
-    } else {
-      video_sw_denoise_enabled_ = true;
-      ALOGI("%s: video sw denoise is enabled in GCH", __FUNCTION__);
-    }
+    ALOGI("%s: video sw denoise is enabled in HWL", __FUNCTION__);
   } else {
     ALOGI("%s: video sw denoise is disabled.", __FUNCTION__);
   }
@@ -924,22 +918,24 @@ void ZslSnapshotCaptureSession::NotifyHalMessage(const NotifyMessage& message) {
     return;
   }
 
-  if (message.type == MessageType::kShutter) {
-    status_t res = result_dispatcher_->AddShutter(message.message.shutter);
+  if (std::holds_alternative<ShutterMessage>(message)) {
+    const ShutterMessage& shutter = std::get<ShutterMessage>(message);
+    status_t res = result_dispatcher_->AddShutter(shutter);
     if (res != OK) {
       ALOGE("%s: AddShutter for frame %u failed: %s (%d).", __FUNCTION__,
-            message.message.shutter.frame_number, strerror(-res), res);
+            shutter.frame_number, strerror(-res), res);
       return;
     }
-  } else if (message.type == MessageType::kError) {
-    status_t res = result_dispatcher_->AddError(message.message.error);
+  } else if (std::holds_alternative<ErrorMessage>(message)) {
+    const ErrorMessage& error = std::get<ErrorMessage>(message);
+    status_t res = result_dispatcher_->AddError(error);
     if (res != OK) {
       ALOGE("%s: AddError for frame %u failed: %s (%d).", __FUNCTION__,
-            message.message.error.frame_number, strerror(-res), res);
+            error.frame_number, strerror(-res), res);
       return;
     }
   } else {
-    ALOGW("%s: Unsupported message type: %u", __FUNCTION__, message.type);
+    ALOGW("%s: Unsupported message type", __FUNCTION__);
     device_session_notify_(message);
   }
 }
