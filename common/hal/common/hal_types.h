@@ -186,6 +186,7 @@ struct HalStream {
   uint32_t physical_camera_id = 0;
   bool is_hal_buffer_managed = false;
   std::vector<GrallocExtendableType> additional_options;
+  bool group_concurrency_enabled = false;
 };
 
 // Corresponds to the definition of ConfigureStreamsRet
@@ -248,8 +249,31 @@ struct CaptureRequest {
   std::unordered_map<uint32_t, std::unique_ptr<HalCameraMetadata>>
       physical_camera_settings;
 
-  uint32_t input_width;
-  uint32_t input_height;
+  uint32_t input_width = 0;
+  uint32_t input_height = 0;
+
+  CaptureRequest Clone() const {
+    CaptureRequest request;
+    request.frame_number = frame_number;
+    if (settings != nullptr) {
+      request.settings = HalCameraMetadata::Clone(settings.get());
+    }
+    request.input_buffers = input_buffers;
+    request.input_buffer_metadata.reserve(input_buffer_metadata.size());
+    for (const auto& metadata : input_buffer_metadata) {
+      request.input_buffer_metadata.push_back(
+          HalCameraMetadata::Clone(metadata.get()));
+    }
+    request.output_buffers = output_buffers;
+    request.physical_camera_settings.reserve(physical_camera_settings.size());
+    for (const auto& [camera_id, metadata] : physical_camera_settings) {
+      request.physical_camera_settings[camera_id] =
+          HalCameraMetadata::Clone(metadata.get());
+    }
+    request.input_width = input_width;
+    request.input_height = input_height;
+    return request;
+  }
 };
 
 // See the definition of
@@ -429,6 +453,16 @@ using NotifyFunc = std::function<void(const NotifyMessage& /*message*/)>;
 // Callback function invoked to notify a batched message.
 using NotifyBatchFunc =
     std::function<void(const std::vector<NotifyMessage>& /*messages*/)>;
+
+// Callback function invoked to notify overriding of pending buffers.
+using NotifyOverridePendingBufferFunc =
+    std::function<void(uint32_t frame_number,
+                       const std::vector<StreamGroupState>& stream_group_state)>;
+
+// Callback to updatet pending buffer.
+using NotifyOverridePendingBufferFunc = std::function<void(
+    uint32_t /*frame_number*/,
+    const std::vector<StreamGroupState>& /*stream_group_state*/)>;
 
 // HAL buffer allocation descriptor
 struct HalBufferDescriptor {

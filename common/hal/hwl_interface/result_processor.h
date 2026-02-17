@@ -39,7 +39,8 @@ class ResultProcessor {
   virtual void SetResultCallback(
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify,
       ProcessBatchCaptureResultFunc process_batch_capture_result,
-      NotifyBatchFunc notify_batch) = 0;
+      NotifyBatchFunc notify_batch,
+      NotifyOverridePendingBufferFunc notify_override_pending_buffer) = 0;
 
   // Add pending requests to the result processor.
   //
@@ -76,6 +77,10 @@ class ResultProcessor {
       Notify(message);
     };
   }
+
+  virtual void NotifyOverridePendingBuffer(
+      uint32_t frame_number,
+      const std::vector<StreamGroupState>& stream_group_state) = 0;
 
   // Flush all pending workload.
   virtual status_t FlushPendingRequests() = 0;

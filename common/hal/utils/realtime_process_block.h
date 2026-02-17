@@ -50,7 +50,7 @@ class RealtimeProcessBlock : public ProcessBlock {
       std::vector<HalStream>* hal_streams) const override;
 
   status_t ProcessRequests(
-      const std::vector<ProcessBlockRequest>& process_block_requests,
+      std::vector<ProcessBlockRequest> process_block_requests,
       const CaptureRequest& remaining_session_request) override;
 
   status_t Flush() override;
@@ -81,6 +81,10 @@ class RealtimeProcessBlock : public ProcessBlock {
                                 const NotifyMessage& message);
 
   void NotifyHwlPipelineBatchMessage(const std::vector<NotifyMessage>& messages);
+
+  void NotifyHwlOverridePendingBuffer(
+      uint32_t frame_number,
+      const std::vector<StreamGroupState>& stream_group_states);
 
   HwlPipelineCallback hwl_pipeline_callback_;
   CameraDeviceSessionHwl* device_session_hwl_ = nullptr;

@@ -50,6 +50,7 @@ std::unique_ptr<CaptureSession> BasicCaptureSession::Create(
     ProcessBatchCaptureResultFunc process_batch_capture_result,
     NotifyFunc notify, NotifyBatchFunc notify_batch,
     HwlSessionCallback /*session_callback*/,
+    NotifyOverridePendingBufferFunc notify_override_pending_buffer,
     std::vector<HalStream>* hal_configured_streams,
     CameraBufferAllocatorHwl* /*camera_allocator_hwl*/) {
   ATRACE_CALL();
@@ -62,7 +63,8 @@ std::unique_ptr<CaptureSession> BasicCaptureSession::Create(
   status_t res = session->Initialize(
       device_session_hwl, stream_config, std::move(process_capture_result),
       std::move(process_batch_capture_result), std::move(notify),
-      std::move(notify_batch), hal_configured_streams);
+      std::move(notify_batch), std::move(notify_override_pending_buffer),
+      hal_configured_streams);
   if (res != OK) {
     ALOGE("%s: Initializing BasicCaptureSession failed: %s (%d).", __FUNCTION__,
           strerror(-res), res);
@@ -193,6 +195,7 @@ status_t BasicCaptureSession::Initialize(
     ProcessCaptureResultFunc process_capture_result,
     ProcessBatchCaptureResultFunc process_batch_capture_result,
     NotifyFunc notify, NotifyBatchFunc notify_batch,
+    NotifyOverridePendingBufferFunc notify_override_pending_buffer,
     std::vector<HalStream>* hal_configured_streams) {
   ATRACE_CALL();
   if (!IsStreamConfigurationSupported(device_session_hwl, stream_config)) {
@@ -228,7 +231,8 @@ status_t BasicCaptureSession::Initialize(
   result_dispatcher_ = ResultDispatcher::Create(
       partial_result_count, std::move(process_capture_result),
       std::move(process_batch_capture_result), std::move(notify),
-      std::move(notify_batch), stream_config, result_dispatcher_name);
+      std::move(notify_batch), std::move(notify_override_pending_buffer),
+      stream_config, result_dispatcher_name);
   if (result_dispatcher_ == nullptr) {
     ALOGE("Creating ResultDispatcher failed");
     return UNKNOWN_ERROR;
@@ -252,9 +256,14 @@ status_t BasicCaptureSession::Initialize(
   auto notify_batch_cb = [this](const std::vector<NotifyMessage>& messages) {
     NotifyBatch(messages);
   };
-  result_processor->SetResultCallback(process_capture_result_cb, notify_cb,
-                                      process_batch_capture_result_cb,
-                                      notify_batch_cb);
+  auto notify_override_pending_buffer_cb =
+      [this](uint32_t frame_number,
+             const std::vector<StreamGroupState>& stream_group_state) {
+        NotifyOverridePendingBuffer(frame_number, stream_group_state);
+      };
+  result_processor->SetResultCallback(
+      process_capture_result_cb, notify_cb, process_batch_capture_result_cb,
+      notify_batch_cb, notify_override_pending_buffer_cb);
 
   // Create process block.
   auto process_block = RealtimeProcessBlock::Create(device_session_hwl_);
@@ -344,6 +353,13 @@ void BasicCaptureSession::NotifyBatch(const std::vector<NotifyMessage>& messages
     }
   }
   result_dispatcher_->AddBatchShutter(shutter_messages);
+}
+
+void BasicCaptureSession::NotifyOverridePendingBuffer(
+    uint32_t frame_number,
+    const std::vector<StreamGroupState>& stream_group_state) {
+  result_dispatcher_->NotifyOverridePendingBuffer(frame_number,
+                                                  stream_group_state);
 }
 
 }  // namespace google_camera_hal

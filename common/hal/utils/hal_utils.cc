@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-//#define LOG_NDEBUG 0
+// #define LOG_NDEBUG 0
 #define LOG_TAG "GCH_HalUtils"
 #include "hal_utils.h"
 
@@ -30,61 +30,36 @@ namespace android {
 namespace google_camera_hal {
 namespace hal_utils {
 
-status_t CreateHwlPipelineRequest(HwlPipelineRequest* hwl_request,
-                                  uint32_t pipeline_id,
-                                  const CaptureRequest& request) {
-  if (hwl_request == nullptr) {
-    ALOGE("%s: hwl_request is nullptr", __FUNCTION__);
-    return BAD_VALUE;
-  }
+HwlPipelineRequest CreateHwlPipelineRequest(uint32_t pipeline_id,
+                                            CaptureRequest request) {
+  HwlPipelineRequest hwl_request;
+  hwl_request.pipeline_id = pipeline_id;
+  hwl_request.settings = std::move(request.settings);
+  hwl_request.input_buffers = std::move(request.input_buffers);
+  hwl_request.output_buffers = std::move(request.output_buffers);
+  hwl_request.input_width = request.input_width;
+  hwl_request.input_height = request.input_height;
+  hwl_request.input_buffer_metadata = std::move(request.input_buffer_metadata);
+  hwl_request.physical_camera_settings =
+      std::move(request.physical_camera_settings);
 
-  hwl_request->pipeline_id = pipeline_id;
-  hwl_request->settings = HalCameraMetadata::Clone(request.settings.get());
-  hwl_request->input_buffers = request.input_buffers;
-  hwl_request->output_buffers = request.output_buffers;
-  hwl_request->input_width = request.input_width;
-  hwl_request->input_height = request.input_height;
-
-  for (auto& metadata : request.input_buffer_metadata) {
-    hwl_request->input_buffer_metadata.push_back(
-        HalCameraMetadata::Clone(metadata.get()));
-  }
-
-  for (auto& [camera_id, physical_metadata] : request.physical_camera_settings) {
-    hwl_request->physical_camera_settings.emplace(
-        camera_id, HalCameraMetadata::Clone(physical_metadata.get()));
-  }
-
-  return OK;
+  return hwl_request;
 }
 
-status_t CreateHwlPipelineRequests(
-    std::vector<HwlPipelineRequest>* hwl_requests,
-    const std::vector<uint32_t>& pipeline_ids,
-    const std::vector<ProcessBlockRequest>& requests) {
-  if (hwl_requests == nullptr) {
-    ALOGE("%s: hwl_requests is nullptr", __FUNCTION__);
-    return BAD_VALUE;
-  }
-
+status_t CreateHwlPipelineRequests(const std::vector<uint32_t>& pipeline_ids,
+                                   std::vector<ProcessBlockRequest> requests,
+                                   std::vector<HwlPipelineRequest>& hwl_requests) {
   if (pipeline_ids.size() != requests.size()) {
     ALOGE("%s: There are %zu pipeline IDs but %zu requests", __FUNCTION__,
           pipeline_ids.size(), requests.size());
     return BAD_VALUE;
   }
 
-  status_t res;
   for (size_t i = 0; i < pipeline_ids.size(); i++) {
-    HwlPipelineRequest hwl_request;
-    res = CreateHwlPipelineRequest(&hwl_request, pipeline_ids[i],
-                                   requests[i].request);
-    if (res != OK) {
-      ALOGE("%s: Creating a HWL pipeline request failed: %s(%d)", __FUNCTION__,
-            strerror(-res), res);
-      return res;
-    }
+    HwlPipelineRequest hwl_request = CreateHwlPipelineRequest(
+        pipeline_ids[i], std::move(requests[i].request));
 
-    hwl_requests->push_back(std::move(hwl_request));
+    hwl_requests.push_back(std::move(hwl_request));
   }
 
   return OK;
@@ -111,9 +86,9 @@ std::unique_ptr<CaptureResult> ConvertToCaptureResult(
 
   capture_result->physical_metadata.reserve(
       hwl_result->physical_camera_results.size());
-  for (const auto& [camera_id, metadata] : hwl_result->physical_camera_results) {
-    capture_result->physical_metadata.push_back(PhysicalCameraMetadata(
-        {camera_id, HalCameraMetadata::Clone(metadata.get())}));
+  for (auto& [camera_id, metadata] : hwl_result->physical_camera_results) {
+    capture_result->physical_metadata.push_back(PhysicalCameraMetadata{
+        .physical_camera_id = camera_id, .metadata = std::move(metadata)});
   }
 
   return capture_result;
@@ -666,10 +641,11 @@ void DumpStreamConfiguration(const StreamConfiguration& stream_configuration,
   for (uint32_t i = 0; i < stream_configuration.streams.size(); i++) {
     auto& stream = stream_configuration.streams[i];
     ALOGI("==== [%u]stream_id %d, type %d, format %d, res %ux%u, usage %" PRIu64
-          ", is_phy %d, phy_cam_id %u, group_id %d",
+          ", is_phy %d, phy_cam_id %u, group_id %d, concurrent_group %d",
           i, stream.id, stream.stream_type, stream.format, stream.width,
           stream.height, stream.usage, stream.is_physical_camera_stream,
-          stream.physical_camera_id, stream.group_id);
+          stream.physical_camera_id, stream.group_id,
+          stream.group_streams_concurrent);
   }
   ALOGI("%s", str.c_str());
 }

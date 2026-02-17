@@ -228,11 +228,11 @@ bool EmulatedSensor::AreCharacteristicsSupported(
       switch (profile.first) {
         case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD:
         case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10:
-        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM:
-        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10_AGTM:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_SMPTE_2094_50:
+        case ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_HLG10_SMPTE_2094_50:
           break;
         default:
-          ALOGE("%s: Only support for HLG10 and AGTM is available!",
+          ALOGE("%s: Only support for HLG10 and SMPTE_2094_50 is available!",
                 __FUNCTION__);
           return false;
       }
@@ -442,7 +442,7 @@ bool EmulatedSensor::IsStreamCombinationSupported(
       if ((stream.dynamic_profile !=
            ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD) &&
           (stream.dynamic_profile !=
-           ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_AGTM)) {
+           ANDROID_REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES_MAP_STANDARD_SMPTE_2094_50)) {
         const SensorCharacteristics& sensor_char =
             stream.is_physical_camera_stream
                 ? sensor_chars.at(stream.physical_camera_id)
@@ -857,16 +857,23 @@ bool EmulatedSensor::threadLoop() {
 
   if ((next_buffers != nullptr) && (settings != nullptr)) {
     callback = next_buffers->at(0)->callback;
+    std::vector<StreamGroupState> stream_group_state =
+        GetStreamGroupState(*next_buffers);
+    uint32_t frame_number = next_buffers->at(0)->frame_number;
     if (callback.notify != nullptr) {
-      std::vector<StreamGroupState> stream_group_state =
-          GetStreamGroupState(*next_buffers);
       NotifyMessage msg = ShutterMessage{
-          .frame_number = next_buffers->at(0)->frame_number,
+          .frame_number = frame_number,
           .timestamp_ns = static_cast<uint64_t>(next_capture_time_),
           .readout_timestamp_ns = static_cast<uint64_t>(next_readout_time_),
           .stream_group_state = stream_group_state};
       callback.notify(next_result->pipeline_id, msg);
     }
+
+    if (callback.notify_override_pending_buffer != nullptr &&
+        stream_group_state.size() > 0) {
+      callback.notify_override_pending_buffer(frame_number, stream_group_state);
+    }
+
     auto b = next_buffers->begin();
     while (b != next_buffers->end()) {
       auto device_settings = settings->find((*b)->camera_id);

@@ -80,6 +80,12 @@ RealtimeProcessBlock::RealtimeProcessBlock(
       [this](const std::vector<NotifyMessage>& messages) {
         NotifyHwlPipelineBatchMessage(messages);
       });
+  hwl_pipeline_callback_.notify_override_pending_buffer =
+      NotifyHwlOverridePendingBufferFunc(
+          [this](uint32_t frame_number,
+                 const std::vector<StreamGroupState>& stream_group_state) {
+            NotifyHwlOverridePendingBuffer(frame_number, stream_group_state);
+          });
 }
 
 status_t RealtimeProcessBlock::SetResultProcessor(
@@ -141,7 +147,7 @@ status_t RealtimeProcessBlock::GetConfiguredHalStreams(
 }
 
 status_t RealtimeProcessBlock::ProcessRequests(
-    const std::vector<ProcessBlockRequest>& process_block_requests,
+    std::vector<ProcessBlockRequest> process_block_requests,
     const CaptureRequest& remaining_session_request) {
   ATRACE_CALL();
   if (process_block_requests.size() != 1) {
@@ -172,17 +178,12 @@ status_t RealtimeProcessBlock::ProcessRequests(
     return NO_INIT;
   }
 
-  std::vector<HwlPipelineRequest> hwl_requests(1);
-  status_t res = hal_utils::CreateHwlPipelineRequest(
-      &hwl_requests[0], pipeline_id_, process_block_requests[0].request);
-  if (res != OK) {
-    ALOGE("%s: Creating HWL pipeline request failed: %s(%d)", __FUNCTION__,
-          strerror(-res), res);
-    return res;
-  }
+  uint32_t frame_number = process_block_requests[0].request.frame_number;
+  std::vector<HwlPipelineRequest> hwl_requests;
+  hwl_requests.push_back(hal_utils::CreateHwlPipelineRequest(
+      pipeline_id_, std::move(process_block_requests[0].request)));
 
-  return device_session_hwl_->SubmitRequests(
-      process_block_requests[0].request.frame_number, hwl_requests);
+  return device_session_hwl_->SubmitRequests(frame_number, hwl_requests);
 }
 
 status_t RealtimeProcessBlock::Flush() {
@@ -277,6 +278,13 @@ void RealtimeProcessBlock::NotifyHwlPipelineBatchMessage(
 
   std::lock_guard<std::mutex> lock(result_processor_lock_);
   result_processor_->NotifyBatch(block_messages);
+}
+
+void RealtimeProcessBlock::NotifyHwlOverridePendingBuffer(
+    uint32_t frame_number,
+    const std::vector<StreamGroupState>& stream_group_state) {
+  result_processor_->NotifyOverridePendingBuffer(frame_number,
+                                                 stream_group_state);
 }
 
 }  // namespace google_camera_hal

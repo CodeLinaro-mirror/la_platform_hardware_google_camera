@@ -40,7 +40,8 @@ class RealtimeZslResultProcessor : public ResultProcessor {
   void SetResultCallback(
       ProcessCaptureResultFunc process_capture_result, NotifyFunc notify,
       ProcessBatchCaptureResultFunc process_batch_capture_result,
-      NotifyBatchFunc notify_batch) override;
+      NotifyBatchFunc notify_batch,
+      NotifyOverridePendingBufferFunc override_pending_buffer) override;
 
   status_t AddPendingRequests(
       const std::vector<ProcessBlockRequest>& process_block_requests,
@@ -51,6 +52,10 @@ class RealtimeZslResultProcessor : public ResultProcessor {
   void ProcessResult(ProcessBlockResult block_result) override;
 
   void Notify(const ProcessBlockNotifyMessage& block_message) override;
+
+  void NotifyOverridePendingBuffer(
+      uint32_t /*frame_number*/,
+      const std::vector<StreamGroupState>& /*stream_group_state*/) override {};
 
   status_t FlushPendingRequests() override;
   // Override functions of ResultProcessor end.
