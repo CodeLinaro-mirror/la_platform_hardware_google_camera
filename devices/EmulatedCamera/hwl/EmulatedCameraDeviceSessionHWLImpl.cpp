@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #define LOG_TAG "EmulatedCameraDevSession"
 #define ATRACE_TAG ATRACE_TAG_CAMERA
 
@@ -27,6 +28,7 @@
 #include <memory>
 
 #include "EmulatedSensor.h"
+#include "hwl_types.h"
 #include "utils.h"
 #include "utils/HWLUtils.h"
 
@@ -78,7 +80,8 @@ std::unique_ptr<EmulatedCameraDeviceSessionHwlImpl>
 EmulatedCameraDeviceSessionHwlImpl::Create(
     uint32_t camera_id, std::unique_ptr<EmulatedCameraDeviceInfo> device_info,
     PhysicalDeviceMapPtr physical_devices,
-    std::shared_ptr<EmulatedTorchState> torch_state) {
+    std::shared_ptr<EmulatedTorchState> torch_state,
+    const FrameSourceConfig& source_config) {
   ATRACE_CALL();
   if (device_info.get() == nullptr) {
     return nullptr;
@@ -86,7 +89,7 @@ EmulatedCameraDeviceSessionHwlImpl::Create(
 
   auto session = std::unique_ptr<EmulatedCameraDeviceSessionHwlImpl>(
       new EmulatedCameraDeviceSessionHwlImpl(std::move(physical_devices),
-                                             torch_state));
+                                             torch_state, source_config));
   if (session == nullptr) {
     ALOGE("%s: Creating EmulatedCameraDeviceSessionHwlImpl failed",
           __FUNCTION__);
@@ -210,7 +213,8 @@ status_t EmulatedCameraDeviceSessionHwlImpl::Initialize(
 status_t EmulatedCameraDeviceSessionHwlImpl::InitializeRequestProcessor() {
   sp<EmulatedSensor> emulated_sensor = new EmulatedSensor();
   auto logical_chars = std::make_unique<LogicalCharacteristics>(logical_chars_);
-  auto ret = emulated_sensor->StartUp(camera_id_, std::move(logical_chars));
+  auto ret = emulated_sensor->StartUp(camera_id_, std::move(logical_chars),
+                                      source_config_);
   if (ret != OK) {
     ALOGE("%s: Failed on sensor start up %s (%d)", __FUNCTION__, strerror(-ret),
           ret);
@@ -446,25 +450,23 @@ status_t EmulatedCameraDeviceSessionHwlImpl::CheckOutputFormatsForInput(
   return OK;
 }
 
-status_t EmulatedCameraDeviceSessionHwlImpl::SubmitRequests(
-    uint32_t frame_number, std::vector<HwlPipelineRequest>& requests) {
+status_t EmulatedCameraDeviceSessionHwlImpl::SubmitRequest(
+    HwlPipelineRequest request) {
   ATRACE_CALL();
   std::lock_guard<std::mutex> lock(api_mutex_);
 
   // Check whether reprocess request has valid/supported outputs.
-  for (const auto& request : requests) {
-    if (!request.input_buffers.empty()) {
-      for (const auto& input_buffer : request.input_buffers) {
-        const auto& streams = pipelines_[request.pipeline_id].streams;
-        auto input_stream = streams.at(input_buffer.stream_id);
-        if ((CheckOutputFormatsForInput(request, streams,
-                                        stream_configuration_map_,
-                                        input_stream.override_format) != OK) &&
-            (CheckOutputFormatsForInput(
-                 request, streams, stream_configuration_map_max_resolution_,
-                 input_stream.override_format) != OK)) {
-          return BAD_VALUE;
-        }
+  if (!request.input_buffers.empty()) {
+    for (const auto& input_buffer : request.input_buffers) {
+      const auto& streams = pipelines_[request.pipeline_id].streams;
+      auto input_stream = streams.at(input_buffer.stream_id);
+      if ((CheckOutputFormatsForInput(request, streams,
+                                      stream_configuration_map_,
+                                      input_stream.override_format) != OK) &&
+          (CheckOutputFormatsForInput(request, streams,
+                                      stream_configuration_map_max_resolution_,
+                                      input_stream.override_format) != OK)) {
+        return BAD_VALUE;
       }
     }
   }
@@ -475,9 +477,8 @@ status_t EmulatedCameraDeviceSessionHwlImpl::SubmitRequests(
     return INVALID_OPERATION;
   }
 
-  return request_processor_->ProcessPipelineRequests(
-      frame_number, requests, pipelines_, dynamic_stream_id_map_,
-      has_raw_stream_);
+  return request_processor_->ProcessPipelineRequest(
+      request, pipelines_, dynamic_stream_id_map_, has_raw_stream_);
 }
 
 status_t EmulatedCameraDeviceSessionHwlImpl::Flush() {

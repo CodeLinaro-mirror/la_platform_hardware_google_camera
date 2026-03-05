@@ -55,17 +55,20 @@ class EmulatedCameraZoomRatioMapperHwlImpl : public ZoomRatioMapperHwl {
   virtual ~EmulatedCameraZoomRatioMapperHwlImpl() = default;
 
   // Limit zoom ratio if concurrent mode is on
-  virtual void LimitZoomRatioIfConcurrent(float*) const override{};
+  virtual void LimitZoomRatioIfConcurrent(float*) const override {
+  }
 
   // Get the array dimensions to be used for this capture request / result
   virtual bool GetActiveArrayDimensionToBeUsed(
       uint32_t camera_id, const HalCameraMetadata* settings,
       Dimension* active_array_dimension) const override;
   // Apply zoom ratio to capture request
-  virtual void UpdateCaptureRequest(CaptureRequest*) override{};
+  virtual void UpdateCaptureRequest(CaptureRequest*) override {
+  }
 
   // Apply zoom ratio to capture result
-  virtual void UpdateCaptureResult(CaptureResult*) override{};
+  virtual void UpdateCaptureResult(CaptureResult*) override {
+  }
 
   static std::unique_ptr<EmulatedCameraZoomRatioMapperHwlImpl> Create(
       const std::unordered_map<uint32_t, std::pair<Dimension, Dimension>>& dims);
@@ -82,7 +85,8 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
   static std::unique_ptr<EmulatedCameraDeviceSessionHwlImpl> Create(
       uint32_t camera_id, std::unique_ptr<EmulatedCameraDeviceInfo> device_info,
       PhysicalDeviceMapPtr physical_devices,
-      std::shared_ptr<EmulatedTorchState> torch_state);
+      std::shared_ptr<EmulatedTorchState> torch_state,
+      const FrameSourceConfig& source_config);
 
   virtual ~EmulatedCameraDeviceSessionHwlImpl();
 
@@ -124,8 +128,7 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
 
   void DestroyPipelines() override;
 
-  status_t SubmitRequests(uint32_t frame_number,
-                          std::vector<HwlPipelineRequest>& requests) override;
+  status_t SubmitRequest(HwlPipelineRequest request) override;
 
   status_t Flush() override;
 
@@ -194,9 +197,11 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
 
   EmulatedCameraDeviceSessionHwlImpl(
       PhysicalDeviceMapPtr physical_devices,
-      std::shared_ptr<EmulatedTorchState> torch_state)
+      std::shared_ptr<EmulatedTorchState> torch_state,
+      const FrameSourceConfig& source_config)
       : torch_state_(torch_state),
-        physical_device_map_(std::move(physical_devices)) {
+        physical_device_map_(std::move(physical_devices)),
+        source_config_(source_config) {
   }
 
   uint8_t max_pipeline_depth_ = 0;
@@ -222,6 +227,7 @@ class EmulatedCameraDeviceSessionHwlImpl : public CameraDeviceSessionHwl {
   HwlSessionCallback session_callback_;
   DynamicStreamIdMapType dynamic_stream_id_map_;
   std::unique_ptr<EmulatedCameraZoomRatioMapperHwlImpl> zoom_ratio_mapper_hwl_impl_;
+  const FrameSourceConfig source_config_;
 };
 
 }  // namespace android
