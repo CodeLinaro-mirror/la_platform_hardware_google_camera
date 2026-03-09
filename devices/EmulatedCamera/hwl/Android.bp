@@ -8,7 +8,9 @@ soong_config_module_type {
     module_type: "cc_defaults",
     config_namespace: "emulated_camera",
     bool_variables: ["use_emulated_camera2_hal_auto"],
-    properties: ["cflags"],
+    properties: [
+        "cflags",
+    ],
 }
 
 emulated_camera_defaults {
@@ -26,16 +28,19 @@ cc_defaults {
     proprietary: true,
     defaults: ["emulated_camera_cflags_defaults"],
     srcs: [
+        "ColorBarFrameSource.cpp",
         "ConfigUtils.cpp",
         "EmulatedCameraProviderHWLImpl.cpp",
         "EmulatedCameraDeviceInfo.cpp",
         "EmulatedCameraDeviceHWLImpl.cpp",
         "EmulatedCameraDeviceSessionHWLImpl.cpp",
+        "EmulatedFrameSource.cpp",
         "EmulatedLogicalRequestState.cpp",
         "EmulatedRequestProcessor.cpp",
         "EmulatedRequestState.cpp",
         "EmulatedTorchState.cpp",
         "GrallocSensorBuffer.cpp",
+        "VideoFrameSource.cpp",
     ],
     cflags: [
         "-Werror",
@@ -70,6 +75,7 @@ cc_defaults {
         "libutils",
         "libyuv",
         "libultrahdr",
+        "libmediandk",
     ],
     static_libs: [
         "android.hardware.camera.common@1.0-helper",
@@ -80,6 +86,7 @@ cc_defaults {
     ],
     header_libs: [
         "libgooglecamerahal_headers",
+        "libstagefright_headers",
     ],
 }
 
@@ -101,8 +108,9 @@ cc_library_static {
     name: "libgooglecamerahwl_sensor_impl",
     owner: "google",
     proprietary: true,
-    host_supported: true,
-    defaults: ["android.hardware.graphics.common-ndk_shared"],
+    defaults: [
+        "android.hardware.graphics.common-ndk_shared",
+    ],
 
     srcs: [
         "EmulatedScene.cpp",
@@ -123,6 +131,7 @@ cc_library_static {
         "libexif",
         "libjpeg",
         "liblog",
+        "libmediandk",
         "libyuv",
         "libultrahdr",
     ],

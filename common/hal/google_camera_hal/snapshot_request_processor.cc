@@ -193,18 +193,18 @@ status_t SnapshotRequestProcessor::ProcessRequest(const CaptureRequest& request)
     return UNKNOWN_ERROR;
   }
 
-  std::vector<ProcessBlockRequest> block_requests;
-  block_requests.push_back(
-      ProcessBlockRequest{.request = std::move(block_request)});
+  ProcessBlockRequest process_block_request{.request = std::move(block_request)};
   ALOGD("%s: frame number %u is a snapshot request.", __FUNCTION__,
         request.frame_number);
 
-  // Obtain reference before moving the vector.
-  const CaptureRequest& first_block_request = block_requests[0].request;
+  // Copies the output buffers from the block request before moving it.
+  std::vector<StreamBuffer> output_buffers =
+      process_block_request.request.output_buffers;
 
-  result = process_block_->ProcessRequests(std::move(block_requests), request);
+  result =
+      process_block_->ProcessRequest(std::move(process_block_request), request);
   if (result != OK) {
-    session_callback_.return_stream_buffers(first_block_request.output_buffers);
+    session_callback_.return_stream_buffers(output_buffers);
   }
 
   return result;

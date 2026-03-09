@@ -21,6 +21,7 @@
 
 #include "zsl_snapshot_capture_session.h"
 
+#include <android-base/properties.h>
 #include <dlfcn.h>
 #include <log/log.h>
 #include <sys/stat.h>
@@ -49,6 +50,48 @@ constexpr char kExternalProcessBlockDir[] =
     "/vendor/lib/camera/google_proprietary/";
 #endif
 #endif  // GCH_HWL_USE_DLOPEN
+
+constexpr char k3PZslEverywhereEnabled[] =
+    "vendor.camera.debug.3p_zsl_everywhere_enabled";
+
+bool IsSwDenoiseSnapshotCompatible(const CaptureRequest& request) {
+  if (request.settings == nullptr) {
+    return false;
+  }
+  camera_metadata_ro_entry entry;
+  if (request.settings->Get(ANDROID_CONTROL_CAPTURE_INTENT, &entry) != OK ||
+      *entry.data.u8 != ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE) {
+    ALOGV("%s: ANDROID_CONTROL_CAPTURE_INTENT is not STILL_CAPTURE",
+          __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_NOISE_REDUCTION_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_NOISE_REDUCTION_MODE_HIGH_QUALITY) {
+    ALOGI("%s: ANDROID_NOISE_REDUCTION_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_EDGE_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_EDGE_MODE_HIGH_QUALITY) {
+    ALOGI("%s: ANDROID_EDGE_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_CONTROL_EFFECT_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_CONTROL_EFFECT_MODE_OFF) {
+    ALOGI("%s: ANDROID_CONTROL_EFFECT_MODE is not off", __FUNCTION__);
+    return false;
+  }
+
+  if (request.settings->Get(ANDROID_TONEMAP_MODE, &entry) != OK ||
+      *entry.data.u8 != ANDROID_TONEMAP_MODE_HIGH_QUALITY) {
+    ALOGI("%s: ANDROID_TONEMAP_MODE is not HQ", __FUNCTION__);
+    return false;
+  }
+
+  return true;
+}
 }  // namespace
 
 std::unique_ptr<ProcessBlock>
@@ -172,6 +215,18 @@ bool ZslSnapshotCaptureSession::IsStreamConfigurationSupported(
   if (res != OK) {
     ALOGE("%s: GetCameraCharacteristics failed.", __FUNCTION__);
     return false;
+  }
+
+  // k3PZslEverywhereEnabled is set as a safeguard.
+  // If true, we can bypass the software denoise check to run ZSL snapshot.
+  if (!android::base::GetBoolProperty(k3PZslEverywhereEnabled, true)) {
+    camera_metadata_ro_entry entry;
+    res = characteristics->Get(VendorTagIds::kSwDenoiseEnabled, &entry);
+
+    if (res != OK || entry.data.u8[0] != 1) {
+      ALOGI("%s: Software denoised not enabled", __FUNCTION__);
+      return false;
+    }
   }
 
   bool has_eligible_snapshot_stream = false;
@@ -804,12 +859,7 @@ status_t ZslSnapshotCaptureSession::ProcessRequest(const CaptureRequest& request
           request.frame_number);
     return BAD_VALUE;
   }
-  const bool is_still_capture =
-      request.settings != nullptr &&
-      request.settings->Get(ANDROID_CONTROL_CAPTURE_INTENT, &entry) == OK &&
-      *entry.data.u8 == ANDROID_CONTROL_CAPTURE_INTENT_STILL_CAPTURE;
-
-  if (is_still_capture) {
+  if (IsSwDenoiseSnapshotCompatible(request)) {
     res = snapshot_request_processor_->ProcessRequest(request);
     if (res != OK) {
       ALOGW(
