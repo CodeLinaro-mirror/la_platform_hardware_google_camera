@@ -47,6 +47,7 @@ cc_defaults {
 
     cflags: [
         "-Werror",
+        "-Wall",
     ],
 
     shared_libs: [
